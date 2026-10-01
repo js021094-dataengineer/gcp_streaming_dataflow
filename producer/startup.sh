@@ -30,7 +30,9 @@ if [[ ! -f /swapfile ]]; then
 fi
 swapon -a || true
 
-if ! command -v python3 >/dev/null || ! python3 -m venv --help >/dev/null 2>&1; then
+# Check the package itself: Debian ships the venv module without ensurepip,
+# so "python3 -m venv --help" succeeds even when venv creation would fail.
+if ! dpkg -s python3-venv >/dev/null 2>&1; then
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv
 fi
