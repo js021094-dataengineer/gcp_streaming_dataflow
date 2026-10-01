@@ -1,0 +1,68 @@
+[
+  {
+    "name": "msg_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Deterministic message id set by the producer (e.g. binance:BTCUSDT:trade:123). Used for de-duplication."
+  },
+  {
+    "name": "pubsub_message_id",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Pub/Sub server-assigned message id."
+  },
+  {
+    "name": "source",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Upstream source, e.g. binance."
+  },
+  {
+    "name": "stream",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Binance stream name, e.g. btcusdt@trade."
+  },
+  {
+    "name": "event_type",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Event type as detected by the producer (attribute), e.g. trade."
+  },
+  {
+    "name": "symbol",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Trading pair as detected by the producer, e.g. BTCUSDT."
+  },
+  {
+    "name": "event_ts",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "Event time used as Beam element timestamp (exchange time; producer receive time if the event has none)."
+  },
+  {
+    "name": "ingest_ts",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "When the producer received the message from the WebSocket. Partition column."
+  },
+  {
+    "name": "publish_ts",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "When Pub/Sub accepted the message."
+  },
+  {
+    "name": "processing_ts",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "When Dataflow processed the message."
+  },
+  {
+    "name": "payload",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Original WebSocket frame, byte-for-byte as received (UTF-8). Use PARSE_JSON(payload) to query."
+  }
+]

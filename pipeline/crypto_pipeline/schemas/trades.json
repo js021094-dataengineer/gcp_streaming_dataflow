@@ -1,0 +1,68 @@
+[
+  {
+    "name": "symbol",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Trading pair, e.g. BTCUSDT."
+  },
+  {
+    "name": "trade_id",
+    "type": "INTEGER",
+    "mode": "REQUIRED",
+    "description": "Binance trade id (unique per symbol)."
+  },
+  {
+    "name": "price",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Fill price in quote currency."
+  },
+  {
+    "name": "quantity",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Fill size in base currency."
+  },
+  {
+    "name": "quote_quantity",
+    "type": "NUMERIC",
+    "mode": "NULLABLE",
+    "description": "price * quantity, rounded to 9 decimals. Building block for VWAP."
+  },
+  {
+    "name": "is_buyer_maker",
+    "type": "BOOLEAN",
+    "mode": "NULLABLE",
+    "description": "True if the buyer was the maker (i.e. the aggressor was a seller)."
+  },
+  {
+    "name": "trade_time",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "Exchange trade time (event time). Partition column."
+  },
+  {
+    "name": "event_time",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "Exchange time the event was emitted on the stream."
+  },
+  {
+    "name": "ingest_time",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "When the producer received the message."
+  },
+  {
+    "name": "processing_time",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "When Dataflow processed the message."
+  },
+  {
+    "name": "msg_id",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Link back to raw_events.msg_id."
+  }
+]

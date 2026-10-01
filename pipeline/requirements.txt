@@ -1,0 +1,3 @@
+# Installed into the Flex Template image on top of the Beam SDK base image.
+# apache-beam itself comes from the base image (see Dockerfile) - keep versions aligned.
+apache-beam[gcp]==2.75.0

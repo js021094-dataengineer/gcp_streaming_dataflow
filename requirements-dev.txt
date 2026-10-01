@@ -1,0 +1,3 @@
+-r producer/requirements.txt
+apache-beam[gcp]==2.75.0
+pytest>=8

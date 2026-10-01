@@ -1,0 +1,56 @@
+[
+  {
+    "name": "msg_id",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Producer message id, if present."
+  },
+  {
+    "name": "pubsub_message_id",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Pub/Sub server-assigned message id."
+  },
+  {
+    "name": "error_stage",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Where it failed: decode | route | validate | unexpected | bq_write."
+  },
+  {
+    "name": "error_type",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Exception class or error category."
+  },
+  {
+    "name": "error_message",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Human-readable error."
+  },
+  {
+    "name": "payload",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Original message payload (or the rejected row for bq_write errors)."
+  },
+  {
+    "name": "attributes",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Pub/Sub attributes as JSON."
+  },
+  {
+    "name": "publish_ts",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "When Pub/Sub accepted the message."
+  },
+  {
+    "name": "processing_ts",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "When Dataflow dead-lettered the message. Partition column."
+  }
+]
