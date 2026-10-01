@@ -1,0 +1,4 @@
+# Keep Unix line endings even when edited on Windows: the shell scripts and
+# startup.sh run on Linux (WSL, Cloud Build, the producer VM) and break with CRLF.
+* text=auto eol=lf
+*.zip binary
