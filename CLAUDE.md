@@ -91,7 +91,10 @@ Startup-script progress on the VM:
   The first minutes show huge latency only because of the old backlog and the 3-5 min worker startup.
 - Gap check: one gap per symbol (64 BTCUSDT, 6 ETHUSDT trade ids, ~7 s). `raw_events` is empty for that window, so the
   producer was offline: it received nothing from ~09:03:02 and logged a graceful stop + reconnect at 09:03:07-09.
-  Cause of the stop not yet confirmed (suspect: startup script restarting `producer.service` right after boot).
+  Likely cause (from code + timestamps, not verified on the VM): `producer.service` was `enable`d, so systemd started it at
+  boot (first DNS lookup failed), then `startup.sh` ended with an unconditional `systemctl restart` that killed it; the
+  stop took ~5 s (websocket close handshake, `close_timeout=5`) plus ~1.5 s to reconnect.
+  Fix committed (`7e1ac1a`): `startup.sh` now runs `systemctl disable producer.service`. **Not deployed yet.**
   Binance's WebSocket cannot replay, so those trades are lost unless backfilled (see roadmap note).
 - Data quality: 0 duplicate `(symbol, trade_id)` keys in `trades` (last 24 h); `dead_letter` empty.
 - Observed: `make status` printed nothing under "BigQuery - last 15 minutes" although rows existed; first the Dataflow
@@ -100,11 +103,14 @@ Startup-script progress on the VM:
 
 ## Next steps
 
-1. Find out why the producer restarted ~12 s after boot: read `producer/startup.sh` and the systemd unit it creates.
-   If it restarts the service after boot, fix it (needs `make infra` + VM restart).
+1. Deploy the `startup.sh` fix: `make infra` (ask first; should only change the VM's `startup-script` metadata), then a
+   normal `make up` session. Verify with `make logs`: exactly one `connecting` at boot and no early
+   `flushing pending publishes...`. The disk still has the unit enabled until the first boot with the new script, so
+   check the second boot too.
 2. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty).
 3. Consider ordering in `up.sh`: start the VM only once the worker is up, to avoid the 3-5 min startup backlog.
-4. Later: REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); event-time VWAP / moving averages
+4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
+5. Later: REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); event-time VWAP / moving averages
    (windows, allowed lateness - backfilled rows arrive late); `bookTicker` stream; monitoring dashboard + alerts;
    CI (GitHub Actions). Optional: budget kill-switch.
 
