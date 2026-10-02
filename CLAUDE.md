@@ -93,19 +93,18 @@ Startup-script progress on the VM:
   producer was offline: it received nothing from ~09:03:02 and logged a graceful stop + reconnect at 09:03:07-09.
   Cause of the stop not yet confirmed (suspect: startup script restarting `producer.service` right after boot).
   Binance's WebSocket cannot replay, so those trades are lost unless backfilled (see roadmap note).
+- Data quality: 0 duplicate `(symbol, trade_id)` keys in `trades` (last 24 h); `dead_letter` empty.
 - Observed: `make status` printed nothing under "BigQuery - last 15 minutes" although rows existed; first the Dataflow
   job list was also empty (fixed itself on the next run). Not yet investigated.
 - Added `docs/roadmap-rest-backfill.md` (design only, nothing implemented) and a README roadmap bullet (commit `fe623f5`).
 
 ## Next steps
 
-1. Finish the data-quality checks from the first run (README queries): duplicates on `(symbol, trade_id)` and
-   `dead_letter` contents. Not yet checked.
-2. Find out why the producer restarted ~12 s after boot: read `producer/startup.sh` and the systemd unit it creates.
+1. Find out why the producer restarted ~12 s after boot: read `producer/startup.sh` and the systemd unit it creates.
    If it restarts the service after boot, fix it (needs `make infra` + VM restart).
-3. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty).
-4. Consider ordering in `up.sh`: start the VM only once the worker is up, to avoid the 3-5 min startup backlog.
-5. Later: REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); event-time VWAP / moving averages
+2. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty).
+3. Consider ordering in `up.sh`: start the VM only once the worker is up, to avoid the 3-5 min startup backlog.
+4. Later: REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); event-time VWAP / moving averages
    (windows, allowed lateness - backfilled rows arrive late); `bookTicker` stream; monitoring dashboard + alerts;
    CI (GitHub Actions). Optional: budget kill-switch.
 
