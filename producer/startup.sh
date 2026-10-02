@@ -83,6 +83,9 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable producer.service
+# This script runs on every boot and starts the service itself. If the unit were
+# enabled, systemd would also start it early at boot (before the network is ready)
+# and the restart below would kill that first process, losing a few seconds of trades.
+systemctl disable producer.service
 systemctl restart producer.service
 echo "[startup] producer running"
