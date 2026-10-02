@@ -81,15 +81,33 @@ Startup-script progress on the VM:
   0 reconnects. ~17k messages left unacked in `crypto-raw-dataflow` (expire ~2026-10-02 20:30 CEST).
 - End state: VM `TERMINATED`, **Dataflow never launched yet**.
 
+**2026-10-02 (session 2) - first full run with Dataflow**
+- `make up` OK: Flex Template launched without fixes, job ran on 1 x n1-standard-2 worker. Ran ~10 min, `make down` OK.
+  End state verified: job `Drained`, VM `TERMINATED`, no worker VMs.
+- Data landed in `raw_events` and `trades` (Storage Write API, rows visible in the streaming buffer).
+- Backlog from the session-1 producer test (~60k messages) was consumed in ~2 min; event time from `event_ts` is
+  honoured (rows with `trade_time` from the previous day were processed fine).
+- Steady-state latency exchange -> BigQuery: p50 ~1-4 s, p99 ~4-9 s at ~90-100 trades/s. Exchange -> producer p50 ~125 ms.
+  The first minutes show huge latency only because of the old backlog and the 3-5 min worker startup.
+- Gap check: one gap per symbol (64 BTCUSDT, 6 ETHUSDT trade ids, ~7 s). `raw_events` is empty for that window, so the
+  producer was offline: it received nothing from ~09:03:02 and logged a graceful stop + reconnect at 09:03:07-09.
+  Cause of the stop not yet confirmed (suspect: startup script restarting `producer.service` right after boot).
+  Binance's WebSocket cannot replay, so those trades are lost unless backfilled (see roadmap note).
+- Observed: `make status` printed nothing under "BigQuery - last 15 minutes" although rows existed; first the Dataflow
+  job list was also empty (fixed itself on the next run). Not yet investigated.
+- Added `docs/roadmap-rest-backfill.md` (design only, nothing implemented) and a README roadmap bullet (commit `fe623f5`).
+
 ## Next steps
 
-1. First full run: `make up` → after ~10 min `make status`; check Dataflow console (job graph, counters
-   `crypto/trades_ok`, `crypto/dead_lettered`), and BigQuery `SELECT * FROM crypto_streaming.trades ORDER BY trade_time DESC LIMIT 10`.
-   Most likely failure point: job launch (Flex Template, Java cross-language Storage Write API, IAM) → read job logs.
-2. Verify data quality with README queries: duplicates on `(symbol, trade_id)`, trade_id gaps, latency, dead letters.
-3. `make down`, confirm nothing running.
-4. Later: event-time VWAP / moving averages (windows, allowed lateness), `bookTicker` stream,
-   monitoring dashboard + alerts, CI (GitHub Actions). Optional: budget kill-switch.
+1. Finish the data-quality checks from the first run (README queries): duplicates on `(symbol, trade_id)` and
+   `dead_letter` contents. Not yet checked.
+2. Find out why the producer restarted ~12 s after boot: read `producer/startup.sh` and the systemd unit it creates.
+   If it restarts the service after boot, fix it (needs `make infra` + VM restart).
+3. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty).
+4. Consider ordering in `up.sh`: start the VM only once the worker is up, to avoid the 3-5 min startup backlog.
+5. Later: REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); event-time VWAP / moving averages
+   (windows, allowed lateness - backfilled rows arrive late); `bookTicker` stream; monitoring dashboard + alerts;
+   CI (GitHub Actions). Optional: budget kill-switch.
 
 ## Known gotchas
 
@@ -97,3 +115,4 @@ Startup-script progress on the VM:
 - WSL clock can drift (local `ingest_ts` was ~1.8 s behind exchange time) - fix with `wsl --shutdown`. VM clock is fine.
 - `make producer-local` `msgs_per_s` includes connect time - not a real rate.
 - pytest warning `cannot collect test class 'TestPipeline'` is harmless.
+- Dataflow job takes a few minutes to go `Draining` -> `Drained` after `make down`; the worker VM disappears first, the job state lags.
