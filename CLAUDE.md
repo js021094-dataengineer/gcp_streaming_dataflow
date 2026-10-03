@@ -94,24 +94,45 @@ Startup-script progress on the VM:
   Likely cause (from code + timestamps, not verified on the VM): `producer.service` was `enable`d, so systemd started it at
   boot (first DNS lookup failed), then `startup.sh` ended with an unconditional `systemctl restart` that killed it; the
   stop took ~5 s (websocket close handshake, `close_timeout=5`) plus ~1.5 s to reconnect.
-  Fix committed (`7e1ac1a`): `startup.sh` now runs `systemctl disable producer.service`. **Not deployed yet.**
+  Fix committed (`7e1ac1a`): `startup.sh` now runs `systemctl disable producer.service` (deployed in session 3).
   Binance's WebSocket cannot replay, so those trades are lost unless backfilled (see roadmap note).
 - Data quality: 0 duplicate `(symbol, trade_id)` keys in `trades` (last 24 h); `dead_letter` empty.
 - Observed: `make status` printed nothing under "BigQuery - last 15 minutes" although rows existed; first the Dataflow
   job list was also empty (fixed itself on the next run). Not yet investigated.
 - Added `docs/roadmap-rest-backfill.md` (design only, nothing implemented) and a README roadmap bullet (commit `fe623f5`).
 
+**2026-10-03 (session 3) - 1 h 10 min run (17:00 -> ~18:09 UTC)**
+- `make infra` applied (plan: 0 add / 1 change / 0 destroy, only the VM's `startup-script` metadata). Tables `trades` and
+  `raw_events` were emptied beforehand with `DELETE ... WHERE 1=1`. `make up` -> ~1 h 10 min -> `make down`.
+  End state verified: job `Drained`, VM `TERMINATED`, no worker VMs.
+- First boot after the deploy still double-started the producer (connect 17:01:31, flush 17:01:45, reconnect 17:01:46) -
+  expected, because the disk still had the unit enabled; that boot's script ran `disable`. **A second boot is not verified yet.**
+  Resulting gap: 5 ETHUSDT + 25 BTCUSDT trade ids (last trade 17:01:38-39, flush 6 s later - consistent with the ~5 s
+  websocket close wait). No other gaps all session; 0 reconnects, 0 publish errors after boot.
+- Market was quiet (Saturday): producer 3-80 msgs/s, ~29 trades/s in the busiest 10 min. First rows reached BigQuery ~6.5 min
+  after the job launch (worker startup), not 3-5 min.
+- Latency: exchange->producer p50 110 ms / p99 399 ms; producer->Pub/Sub p50 84 ms / p99 118 ms (max 197 ms, no clock skew);
+  Pub/Sub->BigQuery via Dataflow p50 ~0.3-0.8 s, p99 up to ~3.4 s (last 10 min before stop).
+- Data quality at 18:08: 91,268 `raw_events` / 91,269 `trades` (1-row difference = in-flight), `dead_letter` empty.
+  **6 duplicate `(symbol, trade_id)` keys**, all present twice in BOTH `raw_events` and `trades` (`raw_copies = 2`), in two
+  incidents (5 trades at 17:10:22 and 1 at 17:15:11), copies processed 2-3 s apart; none after 17:15. Likely cause (inference,
+  not verified): a Dataflow bundle retry re-running the DoFn with the at-least-once sink - `id_label` dedupes at the read only.
+  README already says analytics must dedupe; silver `trades` itself is not deduplicated.
+- Fixed `scripts/logs.sh` (commit `a7da6fd`): `--order=asc` + `--limit` kept the OLDEST entries, so new lines were cut off.
+- Added `docs/roadmap-streaming-analytics.md` (design only; commit `2a7da8f`).
+
 ## Next steps
 
-1. Deploy the `startup.sh` fix: `make infra` (ask first; should only change the VM's `startup-script` metadata), then a
-   normal `make up` session. Verify with `make logs`: exactly one `connecting` at boot and no early
-   `flushing pending publishes...`. The disk still has the unit enabled until the first boot with the new script, so
-   check the second boot too.
-2. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty).
-3. Consider ordering in `up.sh`: start the VM only once the worker is up, to avoid the 3-5 min startup backlog.
-4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
-5. Later: REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); event-time VWAP / moving averages
-   (windows, allowed lateness - backfilled rows arrive late); `bookTicker` stream; monitoring dashboard + alerts;
+1. Verify the `startup.sh` fix on a second boot: start only the VM (no Dataflow, ~3 min; ask first), `make logs` should show
+   exactly one `connecting` and no early `flushing pending publishes...`; then stop the VM.
+2. Make silver clean: add a `trades_clean` view that dedupes on `(symbol, trade_id)` (see `docs/roadmap-streaming-analytics.md`)
+   and point analytics/README queries at it.
+3. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
+4. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty).
+5. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
+6. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
+7. Later: streaming analytics - windowed VWAP/OHLC in Beam + Looker Studio chart (`docs/roadmap-streaming-analytics.md`);
+   REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); `bookTicker` stream; monitoring dashboard + alerts;
    CI (GitHub Actions). Optional: budget kill-switch.
 
 ## Known gotchas
@@ -121,3 +142,7 @@ Startup-script progress on the VM:
 - `make producer-local` `msgs_per_s` includes connect time - not a real rate.
 - pytest warning `cannot collect test class 'TestPipeline'` is harmless.
 - Dataflow job takes a few minutes to go `Draining` -> `Drained` after `make down`; the worker VM disappears first, the job state lags.
+- `make logs` only shows the last 30 min (`--freshness=30m`) and can take a minute to return - run it in the background.
+- Timestamps in `raw_events`: `event_ts` = Binance trade time, `ingest_ts` = producer received the frame, `publish_ts` = Pub/Sub accepted
+  it (server-side), `processing_ts` = Dataflow processed it. In `trades` they are `trade_time`, `ingest_time`, `processing_time`.
+- `make infra` (apply) needs an interactive `yes`; non-interactive runs stop at the prompt - run it in the user's own WSL terminal.
