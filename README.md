@@ -214,7 +214,8 @@ gcloud projects delete gcp-streaming-dataflow  # everything, including the proje
 
 ## Roadmap
 
-- Event-time **VWAP** and moving averages with tumbling/sliding windows, allowed lateness and triggers.
+- Event-time **VWAP** and moving averages with tumbling/sliding windows, allowed lateness and triggers
+  (design: [docs/roadmap-streaming-analytics.md](docs/roadmap-streaming-analytics.md)).
 - REST backfill of trade-id gaps after producer reconnects (design: [docs/roadmap-rest-backfill.md](docs/roadmap-rest-backfill.md)).
 - `bookTicker` stream (best bid/ask) for spreads and mid-price.
 - Cloud Monitoring dashboard + alerting (subscription backlog, system lag, dead-letter rate).
