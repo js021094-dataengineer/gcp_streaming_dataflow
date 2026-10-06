@@ -1,0 +1,98 @@
+[
+  {
+    "name": "symbol",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Trading pair, e.g. BTCUSDT."
+  },
+  {
+    "name": "window_start",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "Start of the 1-minute event-time window (inclusive). Partition column."
+  },
+  {
+    "name": "window_end",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "End of the window (exclusive)."
+  },
+  {
+    "name": "trade_count",
+    "type": "INTEGER",
+    "mode": "REQUIRED",
+    "description": "Distinct trades in the window (duplicates are collapsed)."
+  },
+  {
+    "name": "volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Sum of trade quantity in base currency."
+  },
+  {
+    "name": "quote_volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Sum of price * quantity in quote currency."
+  },
+  {
+    "name": "vwap",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Volume weighted average price: quote_volume / volume."
+  },
+  {
+    "name": "open",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Price of the first trade by (trade time, trade id)."
+  },
+  {
+    "name": "high",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Highest trade price."
+  },
+  {
+    "name": "low",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Lowest trade price."
+  },
+  {
+    "name": "close",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Price of the last trade by (trade time, trade id)."
+  },
+  {
+    "name": "buy_volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Volume where the aggressor was the buyer (is_buyer_maker = false)."
+  },
+  {
+    "name": "sell_volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Volume where the aggressor was the seller (is_buyer_maker = true)."
+  },
+  {
+    "name": "pane_timing",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "ON_TIME (watermark passed the window end) or LATE (late data updated the window). Late panes replace earlier ones: read trade_metrics_1m_latest."
+  },
+  {
+    "name": "pane_index",
+    "type": "INTEGER",
+    "mode": "NULLABLE",
+    "description": "0 for the first result of a window, increasing with every update."
+  },
+  {
+    "name": "processing_ts",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE",
+    "description": "When Dataflow emitted this result."
+  }
+]

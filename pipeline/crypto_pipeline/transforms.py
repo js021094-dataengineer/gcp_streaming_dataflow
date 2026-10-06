@@ -12,11 +12,17 @@ import apache_beam as beam
 from apache_beam.io.gcp.bigquery import BigQueryDisposition, WriteToBigQuery
 from apache_beam.metrics import Metrics
 from apache_beam.pvalue import TaggedOutput
+from apache_beam.transforms import trigger, window
 from apache_beam.utils.timestamp import Timestamp
+from apache_beam.utils.windowed_value import PaneInfoTiming
 
-from crypto_pipeline import bq_schemas, parsing
+from crypto_pipeline import bq_schemas, metrics, parsing
 
 LOG = logging.getLogger(__name__)
+
+WINDOW_SECONDS = 60
+# Trades arriving up to this long after the watermark passed a window still update it.
+ALLOWED_LATENESS_SECONDS = 120
 
 RAW_TAG = "raw"
 TRADES_TAG = "trades"
@@ -132,3 +138,73 @@ class _LogDroppedFn(beam.DoFn):
     def process(self, failed):
         self.dropped.inc()
         LOG.error("Dead-letter write failed: %s", str(failed)[:2000])
+
+
+# --------------------------------------------------------------------------- #
+# Windowed KPIs (gold): VWAP, OHLC, volume per symbol per event-time minute
+# --------------------------------------------------------------------------- #
+_METRICS_TS_FIELDS = bq_schemas.timestamp_fields(bq_schemas.TRADE_METRICS_1M)
+
+
+class TradeMetricsFn(beam.CombineFn):
+    """Aggregate the `trades` rows of one symbol and window into KPIs.
+
+    The arithmetic lives in `metrics.py`. The accumulator is keyed by trade id, so duplicate
+    trades (at-least-once processing, re-delivered late panes) are counted once.
+    """
+
+    def create_accumulator(self):
+        return {}
+
+    def add_input(self, accumulator, trade):
+        return metrics.add_trade(accumulator, trade)
+
+    def merge_accumulators(self, accumulators):
+        return metrics.merge(accumulators)
+
+    def extract_output(self, accumulator):
+        return metrics.finalize(accumulator)
+
+
+class FormatMetricsFn(beam.DoFn):
+    """(symbol, KPIs) + window + pane info -> a `trade_metrics_1m` row."""
+
+    def process(self, element, win=beam.DoFn.WindowParam, pane_info=beam.DoFn.PaneInfoParam):
+        symbol, kpis = element
+        if kpis is None:
+            return
+        row = {
+            "symbol": symbol,
+            "window_start": win.start,
+            "window_end": win.end,
+            **kpis,
+            "pane_timing": PaneInfoTiming.to_string(pane_info.timing),
+            "pane_index": pane_info.index,
+            "processing_ts": int(time.time() * 1000),
+        }
+        yield _ms_to_beam_ts(row, _METRICS_TS_FIELDS)
+
+
+class WindowedTradeMetrics(beam.PTransform):
+    """`trades` rows -> one KPI row per symbol, 1-minute event-time window and pane.
+
+    Fixed windows on the element timestamp (the Pub/Sub `event_ts` attribute = trade time).
+    One on-time pane when the watermark passes the window end, then one more pane for every
+    late element arriving within the allowed lateness. ACCUMULATING mode makes each late pane
+    a complete, replacement result for its window; read the latest pane per window.
+    """
+
+    def expand(self, trades):
+        return (
+            trades
+            | "WindowTrades"
+            >> beam.WindowInto(
+                window.FixedWindows(WINDOW_SECONDS),
+                trigger=trigger.AfterWatermark(late=trigger.AfterCount(1)),
+                accumulation_mode=trigger.AccumulationMode.ACCUMULATING,
+                allowed_lateness=ALLOWED_LATENESS_SECONDS,
+            )
+            | "KeyBySymbol" >> beam.Map(lambda trade: (trade["symbol"], trade))
+            | "AggregateWindow" >> beam.CombinePerKey(TradeMetricsFn())
+            | "FormatMetrics" >> beam.ParDo(FormatMetricsFn())
+        )

@@ -1,8 +1,13 @@
 # Roadmap: streaming analytics (windowed KPIs + dashboard)
 
-Status: **idea / not implemented.** This note holds everything needed to build it later.
-Statements about Beam / Dataflow / BigQuery / Looker Studio behaviour are from memory and are
-marked **(verify)** - check the current docs before relying on them.
+Status: **code and unit tests written (session 4), not deployed or run on Dataflow yet.** The
+dashboard (Looker Studio) is deliberately postponed. Statements about Beam / Dataflow /
+BigQuery / Looker Studio behaviour are from memory and are marked **(verify)** - check the
+current docs before relying on them.
+
+Decisions taken: 1-minute windows only (a 5-minute roll-up can be a SQL view over
+`trade_metrics_1m_latest`: sums add up, VWAP = total quote volume / total volume, open from the
+first minute, close from the last); no early firings; allowed lateness 120 s.
 
 ## Goal
 
@@ -40,8 +45,8 @@ windows in the pipeline itself.
 
 ```
 ParseMessageFn --trades--> WriteTrades                       (unchanged, silver)
-               \--trades--> dedupe -> FixedWindows(60 s) -> combine per symbol -> format -> WriteTable(trade_metrics_1m)
-                                                                                 \-> rejects -> dead_letter
+               \--trades--> FixedWindows(60 s) -> key by symbol -> combine (dedupes by trade_id) -> format
+                            -> back to global window -> WriteTable(trade_metrics_1m) \-> rejects -> dead_letter
 ```
 
 A new branch off `routed[TRADES_TAG]` in `pipeline/crypto_pipeline/pipeline.py`.
@@ -50,24 +55,25 @@ A new branch off `routed[TRADES_TAG]` in `pipeline/crypto_pipeline/pipeline.py`.
    (= trade time `T`) as their timestamp, and `ParDo` outputs keep it, so windows follow
    exchange time. Note that rows on `TRADES_TAG` already hold Beam `Timestamp` and `Decimal`
    values (see `_ms_to_beam_ts` in `transforms.py`) - the aggregation code must work with those.
-2. **De-duplicate before aggregating.** The first full run showed at-least-once duplicates
-   in `trades` (6 of 32,708 rows, both `raw_events` and `trades` repeated 2-3 s apart), and
-   they would inflate `trade_count` and `volume`. Key by `(symbol, trade_id)` inside the window
-   and keep one element (a `GroupByKey`/`CombinePerKey` that picks any). Duplicates share the
-   same event timestamp, so they land in the same window. Volumes per window are small
-   (about 100-6,000 trades per minute), so this is cheap. Alternative: a stateful `DoFn` with a
-   per-key "seen" flag and a timer - more code, no benefit at this scale.
+2. **De-duplicate inside the aggregation.** The first full run showed at-least-once duplicates
+   in `trades` (6 of ~105k rows, both `raw_events` and `trades` repeated 2-3 s apart), and
+   they would inflate `trade_count` and `volume`. A separate `GroupByKey` on
+   `(symbol, trade_id)` before the combine was rejected: in ACCUMULATING mode a late pane of
+   that first stage re-emits an element the second stage has already counted, so late
+   duplicates would be double-counted. Instead the combiner's accumulator is a dict keyed by
+   `trade_id`, so adding or merging the same trade twice collapses to one entry (the merge is a
+   dict union, idempotent) whatever the panes do. Volumes per window are small (about 100-6,000
+   trades per minute), so holding one small entry per trade is cheap.
 3. **Window and triggers.** `FixedWindows(60)`; `allowed_lateness` ~120 s;
    `AfterWatermark(late=AfterCount(1))`; `ACCUMULATING` mode. Start without early firings;
    add `early=AfterProcessingTime(10)` later if the dashboard should update inside the minute.
    Late firings re-emit the full window, so the output table gets several rows per window.
-4. **Aggregation.** One custom `CombineFn` (associative + commutative, as Beam requires):
-   accumulator = `count, volume, quote_volume, buy_volume, sell_volume, high, low,
-   open=(sort_key, price), close=(sort_key, price)` with `sort_key = (trade_time, trade_id)`.
-   `merge` takes min/max by sort key, so out-of-order arrival gives the same open/close.
-   Keep `Decimal` throughout; compute `vwap` at extraction and quantize to NUMERIC scale 9
-   (same helper style as `parsing._NUMERIC_QUANTUM`). Put the arithmetic in a **pure function
-   module** (e.g. `crypto_pipeline/metrics.py`, no Beam imports), like `parsing.py`.
+4. **Aggregation.** One custom `CombineFn` (`TradeMetricsFn`, associative + commutative, as Beam
+   requires). Accumulator = `{trade_id: (trade_time_micros, price, quantity, quote_quantity,
+   is_buyer_maker)}`; `finalize` sorts by `(trade_time, trade_id)` so out-of-order arrival gives
+   the same open/close, and sums volumes. Keep `Decimal` throughout; `vwap` is computed at
+   extraction and quantized to NUMERIC scale 9. The arithmetic lives in the **pure module**
+   `crypto_pipeline/metrics.py` (no Beam imports), like `parsing.py`; `transforms.py` only wraps it.
 5. **Formatting.** A `DoFn` with `beam.DoFn.WindowParam` and `beam.DoFn.PaneInfoParam` that
    emits `window_start`, `window_end`, `pane_timing` (`EARLY`/`ON_TIME`/`LATE`), `pane_index`
    and `processing_ts`, converting timestamps with `_ms_to_beam_ts`.

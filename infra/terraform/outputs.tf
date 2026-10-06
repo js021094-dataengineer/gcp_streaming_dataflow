@@ -22,6 +22,10 @@ output "dead_letter_table" {
   value = "${var.project_id}:${google_bigquery_dataset.crypto.dataset_id}.dead_letter"
 }
 
+output "metrics_table" {
+  value = "${var.project_id}:${google_bigquery_dataset.crypto.dataset_id}.trade_metrics_1m"
+}
+
 output "bucket" {
   value = google_storage_bucket.pipeline.name
 }

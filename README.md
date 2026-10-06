@@ -23,7 +23,7 @@ flowchart LR
 |---|---|
 | `producer/producer.py` | Async WebSocket client → Pub/Sub. Reconnects with backoff + jitter, rotates connections before Binance's 24 h limit, staleness watchdog, publisher batching and flow control (backpressure), graceful flush on shutdown. |
 | `producer/startup.sh` | VM startup script: pulls the latest producer code from GCS on every boot and runs it under systemd. |
-| `pipeline/crypto_pipeline/` | Beam pipeline: `parsing.py` (pure-Python business rules), `transforms.py` (DoFn + Storage Write API sinks), `pipeline.py` (graph + options). |
+| `pipeline/crypto_pipeline/` | Beam pipeline: `parsing.py` (pure-Python business rules), `metrics.py` (pure-Python windowed KPI math), `transforms.py` (DoFn + windowed combiner + Storage Write API sinks), `pipeline.py` (graph + options). |
 | `pipeline/crypto_pipeline/schemas/*.json` | BigQuery schemas - **single source of truth** used by both Terraform and the pipeline. |
 | `pipeline/Dockerfile` | One image for the Flex Template launcher *and* the Dataflow workers. |
 | `infra/terraform/` | Pub/Sub, BigQuery, GCS, Artifact Registry, VPC + firewall, service accounts with least-privilege IAM, producer VM, **budget alert**. |
@@ -125,6 +125,8 @@ long run: one Pub/Sub message processed twice by Dataflow). Analytics should rea
 | `raw_events` | Every message, original payload as STRING (`PARSE_JSON(payload)` to query) | `ingest_ts` | `event_type, symbol` |
 | `trades` | Validated trades; prices/quantities as `NUMERIC` (no float rounding in VWAP). Written at-least-once, so it may contain rare duplicates | `trade_time` | `symbol` |
 | `trades_clean` (view) | `trades` de-duplicated on `(symbol, trade_id)`: the table analytics should query | (from `trades`) | (from `trades`) |
+| `trade_metrics_1m` | **Gold:** VWAP, OHLC, volume, trade count and buy/sell volume per symbol per 1-minute event-time window, computed in Beam (late trades add a replacement pane) | `window_start` | `symbol` |
+| `trade_metrics_1m_latest` (view) | Latest pane per `(symbol, window)` of `trade_metrics_1m`: the table to query for KPIs | (from the table) | (from the table) |
 | `dead_letter` | Failed messages with `error_stage` = `decode` / `route` / `validate` / `bq_write` | `processing_ts` | `error_stage` |
 
 The pipeline never crashes on bad data: anything that can't be parsed, fails validation,
@@ -177,6 +179,12 @@ FROM (
 )
 WHERE next_id - trade_id > 1;
 
+-- 1-minute KPIs per symbol (gold layer, computed in Beam)
+SELECT symbol, window_start, trade_count, volume, vwap, open, high, low, close
+FROM `crypto_streaming.trade_metrics_1m_latest`
+WHERE window_start > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
+ORDER BY window_start DESC, symbol;
+
 -- What went wrong?
 SELECT error_stage, error_message, COUNT(*) AS n
 FROM `crypto_streaming.dead_letter`
@@ -220,8 +228,9 @@ gcloud projects delete gcp-streaming-dataflow  # everything, including the proje
 
 ## Roadmap
 
-- Event-time **VWAP** and moving averages with tumbling/sliding windows, allowed lateness and triggers
-  (design: [docs/roadmap-streaming-analytics.md](docs/roadmap-streaming-analytics.md)).
+- Event-time **VWAP / OHLC / volume** per minute (tumbling windows, de-duplication, allowed lateness):
+  code and unit tests are written, first run on Dataflow pending; still to do: moving averages and a
+  dashboard (design: [docs/roadmap-streaming-analytics.md](docs/roadmap-streaming-analytics.md)).
 - REST backfill of trade-id gaps after producer reconnects (design: [docs/roadmap-rest-backfill.md](docs/roadmap-rest-backfill.md)).
 - `bookTicker` stream (best bid/ask) for spreads and mid-price.
 - Cloud Monitoring dashboard + alerting (subscription backlog, system lag, dead-letter rate).

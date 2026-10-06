@@ -26,6 +26,11 @@ locals {
       partition_field = "processing_ts"
       clustering      = ["error_stage"]
     }
+    trade_metrics_1m = {
+      description     = "Gold: VWAP, OHLC and volume per symbol per 1-minute event-time window. Late data adds panes; read trade_metrics_1m_latest."
+      partition_field = "window_start"
+      clustering      = ["symbol"]
+    }
   }
 }
 
@@ -71,5 +76,30 @@ resource "google_bigquery_table" "trades_clean" {
   }
 
   # The view is validated against the table at creation, so the table must exist first.
+  depends_on = [google_bigquery_table.tables]
+}
+
+# The windowed KPIs can be emitted more than once per window (an on-time pane, then one more for
+# every late trade within the allowed lateness; each later pane is a complete replacement), and
+# the at-least-once sink can repeat a pane. This view keeps the latest pane per symbol and window.
+resource "google_bigquery_table" "trade_metrics_1m_latest" {
+  dataset_id          = google_bigquery_dataset.crypto.dataset_id
+  table_id            = "trade_metrics_1m_latest"
+  description         = "Gold, one row per (symbol, window): the latest pane of trade_metrics_1m. Query this, not the table."
+  labels              = local.labels
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      SELECT *
+      FROM `${var.project_id}.${google_bigquery_dataset.crypto.dataset_id}.trade_metrics_1m`
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY symbol, window_start
+        ORDER BY pane_index DESC, processing_ts DESC
+      ) = 1
+    SQL
+  }
+
   depends_on = [google_bigquery_table.tables]
 }

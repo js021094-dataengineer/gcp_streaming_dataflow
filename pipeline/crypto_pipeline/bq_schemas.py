@@ -16,6 +16,7 @@ _SCHEMA_DIR = Path(__file__).parent / "schemas"
 RAW_EVENTS = "raw_events"
 TRADES = "trades"
 DEAD_LETTER = "dead_letter"
+TRADE_METRICS_1M = "trade_metrics_1m"
 
 
 @lru_cache(maxsize=None)

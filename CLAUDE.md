@@ -9,8 +9,9 @@ Portfolio project showing streaming data engineering on Google Cloud:
 Binance WebSocket (BTCUSDT, ETHUSDT `@trade`) → producer on an e2-micro VM → Pub/Sub topic `crypto-raw`
 → Dataflow (Apache Beam, Python, Flex Template) → BigQuery dataset `crypto_streaming`
 (`raw_events` bronze, `trades` silver, `trades_clean` view = silver de-duplicated - query this, `dead_letter`).
-Current scope: **ingestion into BigQuery only**;
-analytics (VWAP, moving averages) come later.
+Current scope: ingestion into BigQuery plus a gold layer: 1-minute event-time VWAP / OHLC / volume per symbol
+(`trade_metrics_1m`, query the `trade_metrics_1m_latest` view) computed in Beam - code and tests written, first
+Dataflow run pending (see Next steps). Moving averages and a dashboard come later.
 
 ## Environment (important)
 
@@ -43,7 +44,7 @@ Config lives in `config.env` (git-ignored); template in `config.env.example`.
 ## Commands
 
 ```bash
-make test            # unit tests (23, all passing)
+make test            # unit tests (41, all passing; ~25 s, local only)
 make producer-local  # 20 live trades to stdout, no GCP
 make infra           # terraform apply (also uploads producer code + startup script to VM metadata)
 make build           # Cloud Build image + Flex Template (only needed after changes in pipeline/)
@@ -142,14 +143,25 @@ Startup-script progress on the VM:
   the first `make status` ran before the worker had written anything. Now it prints an explicit "no rows" message, uses `trades_clean`,
   shows median (not average) latency, and lists Dataflow worker VMs (names start with `crypto-trades`). Tested only with nothing running;
   check the populated output and the worker listing in the next live session.
+- Streaming analytics implemented locally (not deployed): `metrics.py` (pure VWAP/OHLC/volume math, accumulator = dict keyed by
+  `trade_id`, so duplicates collapse even across late panes), `TradeMetricsFn` / `FormatMetricsFn` / `WindowedTradeMetrics` in
+  `transforms.py` (FixedWindows 60 s, `AfterWatermark(late=AfterCount(1))`, ACCUMULATING, allowed lateness 120 s), optional
+  `--metrics_table` flag + `_add_metrics_branch` in `pipeline.py` (re-windows to global before the sink; rejects go to `dead_letter`),
+  schema `trade_metrics_1m.json`, Terraform table `trade_metrics_1m` + view `trade_metrics_1m_latest` + output `metrics_table`,
+  `up.sh` passes `metrics_table`. 18 new tests (TestStream on Beam's Prism runner): 41 pass. Nothing run against real
+  Pub/Sub/Dataflow/BigQuery yet. Decisions: 1-minute windows only (5-min can be a SQL roll-up view), no early firings, Looker Studio postponed.
 
 ## Next steps
 
-1. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
-2. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
-3. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
-4. In the next live session, check that the new `make status` output looks right with real rows and a running worker.
-5. Later: streaming analytics - windowed VWAP/OHLC in Beam + Looker Studio chart (`docs/roadmap-streaming-analytics.md`);
+1. **Deploy and verify the gold layer** (ask before each billable step): `make infra` in the user's own WSL terminal (expect 2 to add:
+   table + view; do this BEFORE `make up`, which now reads the `metrics_table` output), `make build`, then `make up` for ~15-20 min
+   so several windows close. Verify: recompute the same minutes in SQL from `trades_clean` (`TIMESTAMP_TRUNC(trade_time, MINUTE)`)
+   and compare with `trade_metrics_1m_latest` for closed windows (counts, volume, VWAP, OHLC must match); `dead_letter` has no new
+   `bq_write` rows; check the new `make status` output with real rows and a running worker. Then `make down`.
+2. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
+3. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
+4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
+5. Later: moving averages / 5-min roll-up view and a Looker Studio chart (`docs/roadmap-streaming-analytics.md`);
    REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); `bookTicker` stream; monitoring dashboard + alerts;
    CI (GitHub Actions). Optional: budget kill-switch.
 

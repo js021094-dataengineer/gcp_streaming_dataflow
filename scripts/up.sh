@@ -30,7 +30,7 @@ else
     --num-workers 1 \
     --max-workers 1 \
     --enable-streaming-engine \
-    --parameters "input_subscription=$(tf_out subscription),raw_table=$(tf_out raw_table),trades_table=$(tf_out trades_table),dead_letter_table=$(tf_out dead_letter_table),sdk_container_image=${IMAGE}" \
+    --parameters "input_subscription=$(tf_out subscription),raw_table=$(tf_out raw_table),trades_table=$(tf_out trades_table),dead_letter_table=$(tf_out dead_letter_table),metrics_table=$(tf_out metrics_table),sdk_container_image=${IMAGE}" \
     --format "value(job.id)"
 fi
 
