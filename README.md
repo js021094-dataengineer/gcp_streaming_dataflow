@@ -117,6 +117,8 @@ mode** (cheaper than exactly-once), BigQuery can still see rare duplicates (e.g.
 retries), so the raw `trades` table can hold rare duplicates (6 in ~105k rows in the first
 long run: one Pub/Sub message processed twice by Dataflow). Analytics should read the
 **`trades_clean` view**, which keeps one row per `(symbol, trade_id)` - see the queries below.
+The gold table `trade_metrics_1m` is computed in Beam from `trades` and does not remove these
+duplicates (about 0.006% of trades; a known limitation, see the design note).
 
 **Bronze / silver / dead letter.**
 

@@ -1,5 +1,6 @@
 """Unit tests for the pure KPI aggregation (no Beam)."""
 
+import pickle
 from decimal import Decimal
 
 from crypto_pipeline import metrics
@@ -19,9 +20,9 @@ def _trade(trade_id, price, qty, t_ms, maker=False):
 
 
 def _acc(*trades):
-    acc = {}
+    acc = metrics.empty()
     for trade in trades:
-        metrics.add_trade(acc, trade)
+        acc = metrics.add_trade(acc, trade)
     return acc
 
 
@@ -53,20 +54,40 @@ def test_equal_trade_times_are_ordered_by_trade_id():
     assert out["close"] == Decimal("200")
 
 
-def test_duplicate_trades_are_counted_once():
+def test_duplicates_are_not_removed_known_limitation():
+    # The accumulator is fixed-size, so it cannot recognise a repeated trade. At-least-once
+    # processing duplicates about 0.006% of trades; see the note in metrics.py.
     trade = _trade(1, "100", "2", 1000)
-    out = metrics.finalize(_acc(trade, trade, dict(trade)))
-    assert out["trade_count"] == 1
-    assert out["volume"] == Decimal("2")
+    out = metrics.finalize(_acc(trade, trade))
+    assert out["trade_count"] == 2
+    assert out["volume"] == Decimal("4")
 
 
-def test_merge_is_a_union_and_idempotent():
-    a = _acc(_trade(1, "100", "1", 1000), _trade(2, "101", "1", 2000))
-    b = _acc(_trade(2, "101", "1", 2000), _trade(3, "102", "1", 3000))
-    merged = metrics.merge([a, b])
-    assert sorted(merged) == [1, 2, 3]
-    assert metrics.finalize(metrics.merge([a, a])) == metrics.finalize(a)
-    assert metrics.finalize(metrics.merge([a, b])) == metrics.finalize(metrics.merge([b, a]))
+def test_merge_equals_accumulating_everything_in_one_go():
+    first = [_trade(1, "100", "1", 1000), _trade(2, "101", "2", 2000)]
+    second = [_trade(3, "99", "3", 3000), _trade(4, "102", "1", 4000)]
+    a, b = _acc(*first), _acc(*second)
+    expected = metrics.finalize(_acc(*first, *second))
+    assert metrics.finalize(metrics.merge([a, b])) == expected
+    assert metrics.finalize(metrics.merge([b, a])) == expected  # commutative
+
+
+def test_merge_is_associative_and_has_an_identity():
+    a = _acc(_trade(1, "100", "1", 1000))
+    b = _acc(_trade(2, "105", "2", 2000))
+    c = _acc(_trade(3, "95", "3", 3000))
+    left = metrics.merge([metrics.merge([a, b]), c])
+    right = metrics.merge([a, metrics.merge([b, c])])
+    assert metrics.finalize(left) == metrics.finalize(right)
+    assert metrics.merge([a, metrics.empty()]) == a
+    assert metrics.merge([metrics.empty(), a]) == a
+
+
+def test_accumulator_size_does_not_grow_with_the_number_of_trades():
+    # The reason for the fixed-size design: Dataflow re-encodes the accumulator around every bundle.
+    small = _acc(*[_trade(i, "100.5", "0.01", 1000 + i) for i in range(10)])
+    large = _acc(*[_trade(i, "100.5", "0.01", 1000 + i) for i in range(5000)])
+    assert len(pickle.dumps(large)) <= 2 * len(pickle.dumps(small))
 
 
 def test_buy_and_sell_volume_follow_the_aggressor():
@@ -86,7 +107,7 @@ def test_missing_quote_quantity_is_computed():
 
 
 def test_empty_accumulator_gives_no_output():
-    assert metrics.finalize({}) is None
+    assert metrics.finalize(metrics.empty()) is None
 
 
 def test_beam_style_timestamps_are_read_by_micros():

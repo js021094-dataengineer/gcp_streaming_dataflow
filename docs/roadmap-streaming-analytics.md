@@ -1,12 +1,15 @@
 # Roadmap: streaming analytics (windowed KPIs + dashboard)
 
-Status: **code and unit tests written and deployed (session 4), but the first Dataflow run
-stalled: the windowed combine stage got stuck (`Stuck state: workflow-msec-finish`, watermark
-frozen, no gold rows) while the silver path kept up.** Cause not found yet; offline reproduction
-and a fixed-size accumulator are the next steps (see `CLAUDE.md`). The dashboard (Looker Studio)
-is deliberately postponed. Statements about Beam / Dataflow /
-BigQuery / Looker Studio behaviour are from memory and are marked **(verify)** - check the
-current docs before relying on them.
+Status: **deployed (session 4); the first Dataflow run stalled and the fix is written but not
+yet run live.** On 2026-10-06 the windowed combine stage got stuck (`Stuck state:
+workflow-msec-finish`, watermark frozen, no gold rows) while the silver path kept up. The first
+accumulator held a dict of every trade; offline, on 178k real trades, that cost 93 s of coder
+work for one 4,061-trade window when trades arrive one per bundle (a streaming runner re-reads
+and re-writes the accumulator around every bundle). The accumulator is now fixed-size (0.4 KiB
+instead of 674 KiB, 0.18 s for the same case). Whether that was the cause of the stall still has
+to be confirmed on Dataflow. The dashboard (Looker Studio) is deliberately postponed. Statements
+about Beam / Dataflow / BigQuery / Looker Studio behaviour are from memory and are marked
+**(verify)** - check the current docs before relying on them.
 
 Decisions taken: 1-minute windows only (a 5-minute roll-up can be a SQL view over
 `trade_metrics_1m_latest`: sums add up, VWAP = total quote volume / total volume, open from the
@@ -19,7 +22,7 @@ inside the Beam pipeline, land them in a **gold** BigQuery table, and chart them
 
 Why in Beam and not only SQL: a `GROUP BY` minute query over `trades` is batch analytics on
 streamed data (it recomputes at query time). Windows, watermarks, triggers, allowed lateness
-and de-duplication in Beam are the streaming skills this project is meant to demonstrate, and
+and (later) de-duplication in Beam are the streaming skills this project is meant to demonstrate, and
 the pipeline already carries what they need (event time from `event_ts`, deterministic `msg_id`).
 
 Non-goals (for the first version): `bookTicker`/spread analytics, alerting, anything needing
@@ -31,7 +34,7 @@ Per symbol, per 1-minute event-time window:
 
 | Column | Definition |
 |---|---|
-| `trade_count` | number of distinct trades |
+| `trade_count` | number of trades (at-least-once duplicates, ~0.006%, are not removed) |
 | `volume` | sum of `quantity` (base currency) |
 | `quote_volume` | sum of `quote_quantity` |
 | `vwap` | `quote_volume / volume` (the `trades.quote_quantity` column was added as the VWAP building block) |
@@ -48,7 +51,7 @@ windows in the pipeline itself.
 
 ```
 ParseMessageFn --trades--> WriteTrades                       (unchanged, silver)
-               \--trades--> FixedWindows(60 s) -> key by symbol -> combine (dedupes by trade_id) -> format
+               \--trades--> FixedWindows(60 s) -> key by symbol -> combine (fixed-size accumulator) -> format
                             -> back to global window -> WriteTable(trade_metrics_1m) \-> rejects -> dead_letter
 ```
 
@@ -58,24 +61,30 @@ A new branch off `routed[TRADES_TAG]` in `pipeline/crypto_pipeline/pipeline.py`.
    (= trade time `T`) as their timestamp, and `ParDo` outputs keep it, so windows follow
    exchange time. Note that rows on `TRADES_TAG` already hold Beam `Timestamp` and `Decimal`
    values (see `_ms_to_beam_ts` in `transforms.py`) - the aggregation code must work with those.
-2. **De-duplicate inside the aggregation.** The first full run showed at-least-once duplicates
-   in `trades` (6 of ~105k rows, both `raw_events` and `trades` repeated 2-3 s apart), and
-   they would inflate `trade_count` and `volume`. A separate `GroupByKey` on
-   `(symbol, trade_id)` before the combine was rejected: in ACCUMULATING mode a late pane of
-   that first stage re-emits an element the second stage has already counted, so late
-   duplicates would be double-counted. Instead the combiner's accumulator is a dict keyed by
-   `trade_id`, so adding or merging the same trade twice collapses to one entry (the merge is a
-   dict union, idempotent) whatever the panes do. Volumes per window are small (about 100-6,000
-   trades per minute), so holding one small entry per trade is cheap.
+2. **Duplicates: a known limitation for now.** The first full run showed at-least-once
+   duplicates in `trades` (6 of ~105k rows, both `raw_events` and `trades` repeated 2-3 s
+   apart); in the gold table a duplicate adds to the count and volume of its window (about
+   0.006% of trades). History of this decision: (a) a `GroupByKey` on `(symbol, trade_id)`
+   before the combine was rejected, because in ACCUMULATING mode a late pane of that first
+   stage re-emits an element the second stage has already counted; (b) a dict keyed by
+   `trade_id` inside the accumulator made de-duplication exact and idempotent, but its size
+   grows with the window, and that stalled the first Dataflow run (see Status); (c) the current
+   fixed-size accumulator cannot recognise a repeated trade. Exact de-duplication would need
+   per-trade state that does not live in the combiner: a stateful `DoFn` keyed by
+   `(symbol, trade_id)` with a "seen" flag and an event-time timer to clear it after window end
+   plus allowed lateness, placed before the window so each trade is emitted once (which also
+   removes the late-pane double-count worry). Do this only if exactness matters.
 3. **Window and triggers.** `FixedWindows(60)`; `allowed_lateness` ~120 s;
    `AfterWatermark(late=AfterCount(1))`; `ACCUMULATING` mode. Start without early firings;
    add `early=AfterProcessingTime(10)` later if the dashboard should update inside the minute.
    Late firings re-emit the full window, so the output table gets several rows per window.
 4. **Aggregation.** One custom `CombineFn` (`TradeMetricsFn`, associative + commutative, as Beam
-   requires). Accumulator = `{trade_id: (trade_time_micros, price, quantity, quote_quantity,
-   is_buyer_maker)}`; `finalize` sorts by `(trade_time, trade_id)` so out-of-order arrival gives
-   the same open/close, and sums volumes. Keep `Decimal` throughout; `vwap` is computed at
-   extraction and quantized to NUMERIC scale 9. The arithmetic lives in the **pure module**
+   requires). The accumulator is a **fixed-size** tuple: count, volume, quote volume, buy and
+   sell volume, high, low, and the open and close trade keyed by `(trade_time, trade_id)`, so
+   out-of-order arrival gives the same open/close. Fixed size matters because a streaming runner
+   persists the accumulator and re-reads it around every bundle: the state cost per bundle must
+   not grow with the window. Keep `Decimal` throughout; `vwap` is computed at extraction and
+   quantized to NUMERIC scale 9. The arithmetic lives in the **pure module**
    `crypto_pipeline/metrics.py` (no Beam imports), like `parsing.py`; `transforms.py` only wraps it.
 5. **Formatting.** A `DoFn` with `beam.DoFn.WindowParam` and `beam.DoFn.PaneInfoParam` that
    emits `window_start`, `window_end`, `pane_timing` (`EARLY`/`ON_TIME`/`LATE`), `pane_index`
@@ -142,7 +151,9 @@ Unit (no network, `make test`), using Beam `TestPipeline` + `TestStream` to cont
 watermark:
 - `metrics.py`: combine of known trades gives the expected count/volume/VWAP/OHLC; out-of-order
   input gives identical open/close; `merge` is order-independent; `Decimal` precision (9 dp).
-- Duplicates (same `(symbol, trade_id)` twice) are counted once.
+- Duplicates (same `(symbol, trade_id)` twice) are counted again: the tests document this known
+  limitation, and should be flipped if a stateful de-duplication stage is added.
+- The accumulator stays small: its pickled size does not grow with the number of trades.
 - Window assignment by trade time at the minute boundary (59.999 s vs 60.000 s).
 - Late data: within allowed lateness -> `LATE` pane with updated totals; beyond it -> dropped.
 - Empty window -> no row.

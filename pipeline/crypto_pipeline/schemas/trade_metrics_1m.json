@@ -21,7 +21,7 @@
     "name": "trade_count",
     "type": "INTEGER",
     "mode": "REQUIRED",
-    "description": "Distinct trades in the window (duplicates are collapsed)."
+    "description": "Trades in the window. At-least-once duplicates (about 0.006% of trades) are not removed."
   },
   {
     "name": "volume",

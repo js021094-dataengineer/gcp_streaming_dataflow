@@ -44,7 +44,7 @@ Config lives in `config.env` (git-ignored); template in `config.env.example`.
 ## Commands
 
 ```bash
-make test            # unit tests (41, all passing; ~25 s, local only)
+make test            # unit tests (43, all passing; ~25-40 s, local only)
 make producer-local  # 20 live trades to stdout, no GCP
 make infra           # terraform apply (also uploads producer code + startup script to VM metadata)
 make build           # Cloud Build image + Flex Template (only needed after changes in pipeline/)
@@ -143,8 +143,8 @@ Startup-script progress on the VM:
   the first `make status` ran before the worker had written anything. Now it prints an explicit "no rows" message, uses `trades_clean`,
   shows median (not average) latency, and lists Dataflow worker VMs (names start with `crypto-trades`). Tested only with nothing running;
   check the populated output and the worker listing in the next live session.
-- Streaming analytics implemented (first live run below): `metrics.py` (pure VWAP/OHLC/volume math, accumulator = dict keyed by
-  `trade_id`, so duplicates collapse even across late panes), `TradeMetricsFn` / `FormatMetricsFn` / `WindowedTradeMetrics` in
+- Streaming analytics implemented (first live run below): `metrics.py` (pure VWAP/OHLC/volume math; first version: accumulator = dict keyed by
+  `trade_id`, since replaced by a fixed-size one, see below), `TradeMetricsFn` / `FormatMetricsFn` / `WindowedTradeMetrics` in
   `transforms.py` (FixedWindows 60 s, `AfterWatermark(late=AfterCount(1))`, ACCUMULATING, allowed lateness 120 s), optional
   `--metrics_table` flag + `_add_metrics_branch` in `pipeline.py` (re-windows to global before the sink; rejects go to `dead_letter`),
   schema `trade_metrics_1m.json`, Terraform table `trade_metrics_1m` + view `trade_metrics_1m_latest` + output `metrics_table`,
@@ -163,19 +163,27 @@ Startup-script progress on the VM:
   combine first had to fire the old backlog windows (09:14-09:19, from the VM-only test earlier that day); the dict-per-trade accumulator
   may also be too heavy for streaming state. `make down` OK: worker gone ~10:45, job `Drained` confirmed 10:49, VM `TERMINATED`.
 - New `make status` output confirmed live: worker VM listed (`crypto-trades-...-harness-xxxx`), rows table works.
+- Offline reproduction on REAL data (178,417 trades exported from `trades`, 210 symbol-minute windows, largest 4,061 trades; scratch scripts,
+  not in the repo): pure math 0.15 s, whole transform on the last 20 min with all windows firing at once 6.8 s with correct output - so
+  no logic bug. But the dict accumulator was 674 KiB for the largest window and, with state decoded/re-encoded per bundle, one trade per
+  bundle cost 93 s (10 per bundle 8 s, 100 per bundle 0.9 s): quadratic in the window size. On Dataflow state is remote (Streaming
+  Engine) and bundles are small, so this is the leading suspect for the stall (not yet confirmed live).
+- Replaced the accumulator with a FIXED-SIZE tuple (count, sums, high/low, open/close keyed by (time, trade id)): 0.4 KiB for the same
+  window, one trade per bundle 0.18 s, whole transform still 6.9 s with matching output. Cost: duplicates are no longer removed from the
+  gold table (~0.006% of trades; tests document this as a known limitation); the schema description of `trade_count` was updated. 43 tests pass.
+  Docs updated (design note, README). Not yet deployed.
 
 ## Next steps
 
-1. **Fix the gold branch (it stalls on Dataflow; infra and image are already deployed).**
-   a) Reproduce offline (free): run the combine locally with realistic window sizes (thousands of trades per window) and with the
-      accumulator serialised between steps; time it. The existing unit tests only use a handful of trades in memory.
-   b) Likely redesign: a fixed-size accumulator (count, sums, high/low, open/close by (time, id)) instead of a dict of every trade.
-      Duplicates then need another mechanism (observed rate ~0.006%): accept and document, a stateful de-dupe DoFn, or a view-side fix -
-      decide with the owner.
-   c) Before the next live run consider an experiment that separates "old backlog windows" from "live windows": seek the subscription
-      to now first (drops the backlog; ask before doing it), and look at `make logs` / Monitoring while it runs.
-   d) Verify when it works: recompute the same minutes in SQL from `trades_clean` and compare with `trade_metrics_1m_latest` for
-      closed windows (counts, volume, VWAP, OHLC must match), `dead_letter` has no new `bq_write` rows, then `make down`.
+1. **Confirm on Dataflow that the fixed-size accumulator fixes the gold stall** (fix written and tested locally, not deployed). Steps, ask
+   before each billable one: `make plan` (expect one in-place change: the `trade_count` column description), `make infra` in the user's
+   own WSL terminal, `make build`, `make up` for ~20 min, then check the gold table fills:
+   - `trade_metrics_1m` gets rows; `make status`, Cloud Monitoring (`data_watermark_age` should track real time, `per_stage_system_lag`
+     stay low) and the harness log (no `Stuck state`); if it stalls again the cause was not (only) the accumulator.
+   - Verify: recompute the same minutes in SQL from `trades` and compare with `trade_metrics_1m_latest` for closed windows (counts, volume,
+     VWAP, OHLC must match; `trades_clean` would differ by the ~0.006% duplicates), `dead_letter` has no new `bq_write` rows; then `make down`.
+   - Optional experiment if it stalls: seek the subscription to now first to separate old-backlog windows from live ones (ask first).
+   Optional later: exact de-duplication with a stateful DoFn before the window (see `docs/roadmap-streaming-analytics.md`).
 2. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
 3. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
 4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.

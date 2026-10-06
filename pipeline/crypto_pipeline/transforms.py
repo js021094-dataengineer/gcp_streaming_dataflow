@@ -149,12 +149,13 @@ _METRICS_TS_FIELDS = bq_schemas.timestamp_fields(bq_schemas.TRADE_METRICS_1M)
 class TradeMetricsFn(beam.CombineFn):
     """Aggregate the `trades` rows of one symbol and window into KPIs.
 
-    The arithmetic lives in `metrics.py`. The accumulator is keyed by trade id, so duplicate
-    trades (at-least-once processing, re-delivered late panes) are counted once.
+    The arithmetic lives in `metrics.py`. The accumulator has a fixed size, so the state the
+    runner persists and re-reads for every bundle does not grow with the window. Duplicate
+    trades are not removed (see the known limitation in `metrics.py`).
     """
 
     def create_accumulator(self):
-        return {}
+        return metrics.empty()
 
     def add_input(self, accumulator, trade):
         return metrics.add_trade(accumulator, trade)
