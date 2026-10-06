@@ -10,8 +10,8 @@ Binance WebSocket (BTCUSDT, ETHUSDT `@trade`) → producer on an e2-micro VM →
 → Dataflow (Apache Beam, Python, Flex Template) → BigQuery dataset `crypto_streaming`
 (`raw_events` bronze, `trades` silver, `trades_clean` view = silver de-duplicated - query this, `dead_letter`).
 Current scope: ingestion into BigQuery plus a gold layer: 1-minute event-time VWAP / OHLC / volume per symbol
-(`trade_metrics_1m`, query the `trade_metrics_1m_latest` view) computed in Beam - code and tests written, first
-Dataflow run pending (see Next steps). Moving averages and a dashboard come later.
+(`trade_metrics_1m`, query the `trade_metrics_1m_latest` view) computed in Beam - deployed, but the first Dataflow run
+(2026-10-06) stalled in the windowed combine and wrote no gold rows (see Next steps). Moving averages and a dashboard come later.
 
 ## Environment (important)
 
@@ -143,21 +143,39 @@ Startup-script progress on the VM:
   the first `make status` ran before the worker had written anything. Now it prints an explicit "no rows" message, uses `trades_clean`,
   shows median (not average) latency, and lists Dataflow worker VMs (names start with `crypto-trades`). Tested only with nothing running;
   check the populated output and the worker listing in the next live session.
-- Streaming analytics implemented locally (not deployed): `metrics.py` (pure VWAP/OHLC/volume math, accumulator = dict keyed by
+- Streaming analytics implemented (first live run below): `metrics.py` (pure VWAP/OHLC/volume math, accumulator = dict keyed by
   `trade_id`, so duplicates collapse even across late panes), `TradeMetricsFn` / `FormatMetricsFn` / `WindowedTradeMetrics` in
   `transforms.py` (FixedWindows 60 s, `AfterWatermark(late=AfterCount(1))`, ACCUMULATING, allowed lateness 120 s), optional
   `--metrics_table` flag + `_add_metrics_branch` in `pipeline.py` (re-windows to global before the sink; rejects go to `dead_letter`),
   schema `trade_metrics_1m.json`, Terraform table `trade_metrics_1m` + view `trade_metrics_1m_latest` + output `metrics_table`,
-  `up.sh` passes `metrics_table`. 18 new tests (TestStream on Beam's Prism runner): 41 pass. Nothing run against real
-  Pub/Sub/Dataflow/BigQuery yet. Decisions: 1-minute windows only (5-min can be a SQL roll-up view), no early firings, Looker Studio postponed.
+  `up.sh` passes `metrics_table`. 18 new tests (TestStream on Beam's Prism runner): 41 pass.
+  Decisions: 1-minute windows only (5-min can be a SQL roll-up view), no early firings, Looker Studio postponed.
+- Deployed the gold layer: `make infra` (2 added: table + view), `make build` failed twice at Step 3 (launcher base image `latest`
+  moved on 2026-10-02, "invalid tar header"); pinned `LAUNCHER_TAG=20260901-rc00` and the build succeeded (image
+  `crypto-pipeline:20261006-100611`, commit `eced351`).
+- **First live run with the gold layer (10:11 -> ~10:45 UTC, ~$0.15): silver fine, gold EMPTY.** `raw_events`/`trades` kept up in
+  real time (35,595 rows each at 10:24, ~48 trades/s, `dead_letter` 0), but `trade_metrics_1m` stayed at 0 rows for 21+ min.
+  Dataflow logged `ERROR Stuck state: workflow-msec-finish` at 10:24:36 (stack: `StreamingMergeBucketsOperator::Finish ->
+  MergeWindowsFn::FinishKey -> KeyedCombiner::Combine -> FnApiSdkInvocation::Invoke -> WaitToFinish`), i.e. the service waits for our
+  Python `TradeMetricsFn` bundle to return. Cloud Monitoring: job `data_watermark_age` ~4,500 s and growing 1:1 (watermark frozen at
+  ~09:20 UTC), stage F383 `system_lag` grew from 1 s to ~716 s starting ~10:24, stage F382 healthy (1 s). No Python errors, tracebacks or
+  lull warnings in the logs; Java harness memory fine (953/1801 MB, no GC thrash). Hypothesis (unverified): the stall began when the
+  combine first had to fire the old backlog windows (09:14-09:19, from the VM-only test earlier that day); the dict-per-trade accumulator
+  may also be too heavy for streaming state. `make down` OK: worker gone ~10:45, job `Drained` confirmed 10:49, VM `TERMINATED`.
+- New `make status` output confirmed live: worker VM listed (`crypto-trades-...-harness-xxxx`), rows table works.
 
 ## Next steps
 
-1. **Deploy and verify the gold layer** (ask before each billable step): `make infra` in the user's own WSL terminal (expect 2 to add:
-   table + view; do this BEFORE `make up`, which now reads the `metrics_table` output), `make build`, then `make up` for ~15-20 min
-   so several windows close. Verify: recompute the same minutes in SQL from `trades_clean` (`TIMESTAMP_TRUNC(trade_time, MINUTE)`)
-   and compare with `trade_metrics_1m_latest` for closed windows (counts, volume, VWAP, OHLC must match); `dead_letter` has no new
-   `bq_write` rows; check the new `make status` output with real rows and a running worker. Then `make down`.
+1. **Fix the gold branch (it stalls on Dataflow; infra and image are already deployed).**
+   a) Reproduce offline (free): run the combine locally with realistic window sizes (thousands of trades per window) and with the
+      accumulator serialised between steps; time it. The existing unit tests only use a handful of trades in memory.
+   b) Likely redesign: a fixed-size accumulator (count, sums, high/low, open/close by (time, id)) instead of a dict of every trade.
+      Duplicates then need another mechanism (observed rate ~0.006%): accept and document, a stateful de-dupe DoFn, or a view-side fix -
+      decide with the owner.
+   c) Before the next live run consider an experiment that separates "old backlog windows" from "live windows": seek the subscription
+      to now first (drops the backlog; ask before doing it), and look at `make logs` / Monitoring while it runs.
+   d) Verify when it works: recompute the same minutes in SQL from `trades_clean` and compare with `trade_metrics_1m_latest` for
+      closed windows (counts, volume, VWAP, OHLC must match), `dead_letter` has no new `bq_write` rows, then `make down`.
 2. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
 3. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
 4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
@@ -177,6 +195,11 @@ Startup-script progress on the VM:
   it (server-side), `processing_ts` = Dataflow processed it. In `trades` they are `trade_time`, `ingest_time`, `processing_time`.
 - `make infra` (apply) needs an interactive `yes`; non-interactive runs stop at the prompt - run it in the user's own WSL terminal.
   While an apply waits at that prompt it already holds the Terraform state lock, so `make plan` fails until it finishes.
+- Reading Dataflow internals from the terminal (read-only): job messages with `gcloud beta dataflow logs list JOB --region R
+  --importance=warning` (the non-beta command does not exist); watermark and lag from Cloud Monitoring REST
+  (`dataflow.googleapis.com/job/data_watermark_age`, `job/system_lag`, `job/per_stage_data_watermark_age`, `job/per_stage_system_lag`)
+  - the filter must use `resource.labels.job_name` (NOT `job_id`, which gives HTTP 400); stage ids like F382 are not step names.
+  Cloud Logging filter on `resource.labels.job_id`; the stuck-state dumps are in log `dataflow.googleapis.com%2Fharness`.
 - The Flex Template launcher base image is pinned in `pipeline/Dockerfile` (`ARG LAUNCHER_TAG=20260901-rc00`). Unpinned `latest`
   moved on 2026-10-02 and two builds failed pulling it ("failed to register layer ... invalid tar header", Step 3 of the Dockerfile);
   pinning fixed it (build 2m38s). Bump the tag deliberately; list tags with

@@ -1,7 +1,10 @@
 # Roadmap: streaming analytics (windowed KPIs + dashboard)
 
-Status: **code and unit tests written (session 4), not deployed or run on Dataflow yet.** The
-dashboard (Looker Studio) is deliberately postponed. Statements about Beam / Dataflow /
+Status: **code and unit tests written and deployed (session 4), but the first Dataflow run
+stalled: the windowed combine stage got stuck (`Stuck state: workflow-msec-finish`, watermark
+frozen, no gold rows) while the silver path kept up.** Cause not found yet; offline reproduction
+and a fixed-size accumulator are the next steps (see `CLAUDE.md`). The dashboard (Looker Studio)
+is deliberately postponed. Statements about Beam / Dataflow /
 BigQuery / Looker Studio behaviour are from memory and are marked **(verify)** - check the
 current docs before relying on them.
 
