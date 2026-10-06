@@ -138,14 +138,17 @@ Startup-script progress on the VM:
   (the earlier "can't delete buffered rows" remark was the old streaming-insert rule).
 - Looked up BigQuery ingestion pricing (search summary only, page fetch was truncated, unverified): Storage Write API ~$0.025/GiB with
   2 TiB/month free vs legacy streaming inserts ~$0.05/GiB - negligible at this volume either way.
+- Fixed `scripts/status.sh`: the "empty BigQuery section" was not a query bug - `bq --format=pretty` prints nothing for zero rows, and
+  the first `make status` ran before the worker had written anything. Now it prints an explicit "no rows" message, uses `trades_clean`,
+  shows median (not average) latency, and lists Dataflow worker VMs (names start with `crypto-trades`). Tested only with nothing running;
+  check the populated output and the worker listing in the next live session.
 
 ## Next steps
 
 1. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
-2. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty); consider
-   pointing it at `trades_clean`.
-3. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
-4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
+2. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
+3. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
+4. In the next live session, check that the new `make status` output looks right with real rows and a running worker.
 5. Later: streaming analytics - windowed VWAP/OHLC in Beam + Looker Studio chart (`docs/roadmap-streaming-analytics.md`);
    REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); `bookTicker` stream; monitoring dashboard + alerts;
    CI (GitHub Actions). Optional: budget kill-switch.
