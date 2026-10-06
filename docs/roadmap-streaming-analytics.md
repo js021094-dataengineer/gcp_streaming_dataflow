@@ -1,13 +1,14 @@
 # Roadmap: streaming analytics (windowed KPIs + dashboard)
 
-Status: **deployed (session 4); the first Dataflow run stalled and the fix is written but not
-yet run live.** On 2026-10-06 the windowed combine stage got stuck (`Stuck state:
+Status: **deployed and verified live (session 4): the first Dataflow run stalled, and the
+fixed-size accumulator fixed it.** On 2026-10-06 the windowed combine stage got stuck (`Stuck state:
 workflow-msec-finish`, watermark frozen, no gold rows) while the silver path kept up. The first
 accumulator held a dict of every trade; offline, on 178k real trades, that cost 93 s of coder
 work for one 4,061-trade window when trades arrive one per bundle (a streaming runner re-reads
 and re-writes the accumulator around every bundle). The accumulator is now fixed-size (0.4 KiB
-instead of 674 KiB, 0.18 s for the same case). Whether that was the cause of the stall still has
-to be confirmed on Dataflow. The dashboard (Looker Studio) is deliberately postponed. Statements
+instead of 674 KiB, 0.18 s for the same case). A second live run then worked: gold rows current
+to within seconds, no stuck state, and 22 of 22 windows identical to a SQL recomputation from
+`trades` (count, volume, VWAP, open, close, high, low). The dashboard (Looker Studio) is deliberately postponed. Statements
 about Beam / Dataflow / BigQuery / Looker Studio behaviour are from memory and are marked
 **(verify)** - check the current docs before relying on them.
 
@@ -78,6 +79,11 @@ A new branch off `routed[TRADES_TAG]` in `pipeline/crypto_pipeline/pipeline.py`.
    `AfterWatermark(late=AfterCount(1))`; `ACCUMULATING` mode. Start without early firings;
    add `early=AfterProcessingTime(10)` later if the dashboard should update inside the minute.
    Late firings re-emit the full window, so the output table gets several rows per window.
+   Observed on 2026-10-06: every window also gets one extra `LATE` pane (pane_index 1), identical
+   to its `ON_TIME` pane, about 150 s after the window end (window end + allowed lateness +
+   watermark lag): our reading is that it is emitted when the window expires, not because a trade
+   arrived late (a genuinely late trade would show a higher `trade_count`; none so far).
+   Consumers should read the latest pane (`trade_metrics_1m_latest`).
 4. **Aggregation.** One custom `CombineFn` (`TradeMetricsFn`, associative + commutative, as Beam
    requires). The accumulator is a **fixed-size** tuple: count, volume, quote volume, buy and
    sell volume, high, low, and the open and close trade keyed by `(trade_time, trade_id)`, so

@@ -10,8 +10,9 @@ Binance WebSocket (BTCUSDT, ETHUSDT `@trade`) → producer on an e2-micro VM →
 → Dataflow (Apache Beam, Python, Flex Template) → BigQuery dataset `crypto_streaming`
 (`raw_events` bronze, `trades` silver, `trades_clean` view = silver de-duplicated - query this, `dead_letter`).
 Current scope: ingestion into BigQuery plus a gold layer: 1-minute event-time VWAP / OHLC / volume per symbol
-(`trade_metrics_1m`, query the `trade_metrics_1m_latest` view) computed in Beam - deployed, but the first Dataflow run
-(2026-10-06) stalled in the windowed combine and wrote no gold rows (see Next steps). Moving averages and a dashboard come later.
+(`trade_metrics_1m`, query the `trade_metrics_1m_latest` view) computed in Beam - deployed and verified live on 2026-10-06 (second run:
+22 of 22 windows identical to a SQL recomputation from `trades`; the first run had stalled, see Progress log). Moving averages and
+a dashboard come later.
 
 ## Environment (important)
 
@@ -171,19 +172,29 @@ Startup-script progress on the VM:
 - Replaced the accumulator with a FIXED-SIZE tuple (count, sums, high/low, open/close keyed by (time, trade id)): 0.4 KiB for the same
   window, one trade per bundle 0.18 s, whole transform still 6.9 s with matching output. Cost: duplicates are no longer removed from the
   gold table (~0.006% of trades; tests document this as a known limitation); the schema description of `trade_count` was updated. 43 tests pass.
-  Docs updated (design note, README). Not yet deployed.
+  Docs updated (design note, README).
+- **Second live run with the fixed-size accumulator (18:06 -> ~18:33 UTC, ~$0.10): the gold layer works.** `make build` OK (image
+  `crypto-pipeline:20261006-175456`, 2m55s); `make infra` was skipped on purpose (only the `trade_count` column description changed in
+  the schema file, BigQuery still has the old text; the next `make plan` will show it). Same conditions as the stalled run (VM and job
+  started together, ~7 min of backlog processed in a burst). Results at 18:29: gold rows current (newest window 18:28 emitted 26 s after
+  its end), data watermark age 385 s during the backlog then 33 s (tracks real time), `per_stage_system_lag` max 15 s (was 716 s),
+  NO `Stuck state` errors, `dead_letter` 0, silver current. **Verification: all 22 windows 18:07-18:17 (BTCUSDT and ETHUSDT) match a
+  recomputation from `trades` exactly** (trade_count, volume, VWAP to 6 decimals, open, close, high, low). So the dict accumulator was the cause
+  of the stall (consistent offline benchmark + no stall now; not proven to be the only factor). `make down` at 18:31: job `Drained` by
+  18:37 (~6 min), worker gone, VM `TERMINATED`, nothing running.
+- **Correction about LATE panes:** every window gets one extra pane with `pane_timing = LATE` (pane_index 1) that is IDENTICAL to its ON_TIME
+  pane: 38 of 38 windows checked, 0 with more trades, emitted 144-388 s (median 153 s) after window end = window end + 120 s allowed lateness
+  + watermark lag. It is the firing when the window expires (our reading of Beam's behaviour in ACCUMULATING mode, not verified in the docs),
+  NOT a late trade. A genuinely late trade would show as a LATE pane with a higher `trade_count`; none so far (so no trade was dropped
+  past the allowed lateness). The table therefore has ~2 rows per window; always query `trade_metrics_1m_latest`.
 
 ## Next steps
 
-1. **Confirm on Dataflow that the fixed-size accumulator fixes the gold stall** (fix written and tested locally, not deployed). Steps, ask
-   before each billable one: `make plan` (expect one in-place change: the `trade_count` column description), `make infra` in the user's
-   own WSL terminal, `make build`, `make up` for ~20 min, then check the gold table fills:
-   - `trade_metrics_1m` gets rows; `make status`, Cloud Monitoring (`data_watermark_age` should track real time, `per_stage_system_lag`
-     stay low) and the harness log (no `Stuck state`); if it stalls again the cause was not (only) the accumulator.
-   - Verify: recompute the same minutes in SQL from `trades` and compare with `trade_metrics_1m_latest` for closed windows (counts, volume,
-     VWAP, OHLC must match; `trades_clean` would differ by the ~0.006% duplicates), `dead_letter` has no new `bq_write` rows; then `make down`.
-   - Optional experiment if it stalls: seek the subscription to now first to separate old-backlog windows from live ones (ask first).
-   Optional later: exact de-duplication with a stateful DoFn before the window (see `docs/roadmap-streaming-analytics.md`).
+1. Gold layer follow-ups (it works; these are polish): (a) the redundant expiry pane - decide whether to suppress it or just document
+   it (the `pane_timing` description in `trade_metrics_1m.json` still says LATE means late data updated the window, which is misleading;
+   fixing the description needs `make infra`, which would also apply the pending `trade_count` description); (b) optional exact
+   de-duplication with a stateful DoFn before the window (see `docs/roadmap-streaming-analytics.md`); (c) a 5-minute roll-up view and
+   moving averages in SQL.
 2. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
 3. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
 4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
