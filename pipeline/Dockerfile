@@ -2,8 +2,11 @@
 # (sdk_container_image), so workers start with every dependency preinstalled.
 ARG BEAM_VERSION=2.75.0
 ARG PY_VERSION=311
+# Pinned: `latest` moved to a new release on 2026-10-02 and its layers failed to unpack in Cloud Build
+# ("invalid tar header"). This is the release the first successful build used. Bump deliberately.
+ARG LAUNCHER_TAG=20260901-rc00
 
-FROM gcr.io/dataflow-templates-base/python${PY_VERSION}-template-launcher-base AS template_launcher
+FROM gcr.io/dataflow-templates-base/python${PY_VERSION}-template-launcher-base:${LAUNCHER_TAG} AS template_launcher
 FROM apache/beam_python3.11_sdk:${BEAM_VERSION}
 
 # The Storage Write API is a cross-language (Java) transform in the Python SDK.

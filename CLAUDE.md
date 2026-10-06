@@ -177,5 +177,9 @@ Startup-script progress on the VM:
   it (server-side), `processing_ts` = Dataflow processed it. In `trades` they are `trade_time`, `ingest_time`, `processing_time`.
 - `make infra` (apply) needs an interactive `yes`; non-interactive runs stop at the prompt - run it in the user's own WSL terminal.
   While an apply waits at that prompt it already holds the Terraform state lock, so `make plan` fails until it finishes.
+- The Flex Template launcher base image is pinned in `pipeline/Dockerfile` (`ARG LAUNCHER_TAG=20260901-rc00`). Unpinned `latest`
+  moved on 2026-10-02 and two builds failed pulling it ("failed to register layer ... invalid tar header", Step 3 of the Dockerfile);
+  pinning fixed it (build 2m38s). Bump the tag deliberately; list tags with
+  `gcloud container images list-tags gcr.io/dataflow-templates-base/python311-template-launcher-base`.
 - `bq query` with a backtick-quoted `project.dataset.table` inside `wsl bash -lc "..."` loses the backticks (shell command
   substitution). Put the SQL in a file and redirect it (`< file.sql`), or use `dataset.table` without the project.
