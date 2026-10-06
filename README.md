@@ -114,14 +114,17 @@ producer receive time.
 producer sets a deterministic `msg_id` (`binance:BTCUSDT:trade:<trade id>`) and Dataflow
 drops duplicates with `id_label`. Combined with the **Storage Write API in at-least-once
 mode** (cheaper than exactly-once), BigQuery can still see rare duplicates (e.g. worker
-retries), so analytics should dedupe on `(symbol, trade_id)` - see the queries below.
+retries), so the raw `trades` table can hold rare duplicates (6 in ~105k rows in the first
+long run: one Pub/Sub message processed twice by Dataflow). Analytics should read the
+**`trades_clean` view**, which keeps one row per `(symbol, trade_id)` - see the queries below.
 
 **Bronze / silver / dead letter.**
 
 | Table | Contents | Partitioned by | Clustered by |
 |---|---|---|---|
 | `raw_events` | Every message, original payload as STRING (`PARSE_JSON(payload)` to query) | `ingest_ts` | `event_type, symbol` |
-| `trades` | Validated trades; prices/quantities as `NUMERIC` (no float rounding in VWAP) | `trade_time` | `symbol` |
+| `trades` | Validated trades; prices/quantities as `NUMERIC` (no float rounding in VWAP). Written at-least-once, so it may contain rare duplicates | `trade_time` | `symbol` |
+| `trades_clean` (view) | `trades` de-duplicated on `(symbol, trade_id)`: the table analytics should query | (from `trades`) | (from `trades`) |
 | `dead_letter` | Failed messages with `error_stage` = `decode` / `route` / `validate` / `bq_write` | `processing_ts` | `error_stage` |
 
 The pipeline never crashes on bad data: anything that can't be parsed, fails validation,
@@ -138,35 +141,38 @@ subscriptions.
 ## Useful queries
 
 ```sql
--- Latest trades, de-duplicated (at-least-once delivery => dedupe in analytics)
+-- Latest trades (trades_clean = trades de-duplicated on (symbol, trade_id))
 SELECT *
-FROM `crypto_streaming.trades`
+FROM `crypto_streaming.trades_clean`
 WHERE trade_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
-QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol, trade_id ORDER BY processing_time) = 1
 ORDER BY trade_time DESC
 LIMIT 100;
+
+-- How many duplicates did the at-least-once write produce?
+SELECT (SELECT COUNT(*) FROM `crypto_streaming.trades`) -
+       (SELECT COUNT(*) FROM `crypto_streaming.trades_clean`) AS duplicate_rows;
 
 -- End-to-end latency: exchange -> producer -> BigQuery
 SELECT symbol,
        APPROX_QUANTILES(TIMESTAMP_DIFF(ingest_time, trade_time, MILLISECOND), 100)[OFFSET(50)] AS p50_exchange_to_producer_ms,
        APPROX_QUANTILES(TIMESTAMP_DIFF(processing_time, trade_time, MILLISECOND), 100)[OFFSET(50)] AS p50_exchange_to_dataflow_ms,
        APPROX_QUANTILES(TIMESTAMP_DIFF(processing_time, trade_time, MILLISECOND), 100)[OFFSET(99)] AS p99_exchange_to_dataflow_ms
-FROM `crypto_streaming.trades`
+FROM `crypto_streaming.trades_clean`
 WHERE trade_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
 GROUP BY symbol;
 
 -- Throughput per second
 SELECT TIMESTAMP_TRUNC(trade_time, SECOND) AS second, symbol, COUNT(*) AS trades
-FROM `crypto_streaming.trades`
+FROM `crypto_streaming.trades_clean`
 WHERE trade_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 10 MINUTE)
 GROUP BY 1, 2 ORDER BY 1 DESC;
 
 -- Gaps in trade ids = data loss check (Binance trade ids are sequential per symbol)
 SELECT symbol, trade_id, next_id - trade_id - 1 AS missing
 FROM (
-  SELECT DISTINCT symbol, trade_id,
+  SELECT symbol, trade_id,
          LEAD(trade_id) OVER (PARTITION BY symbol ORDER BY trade_id) AS next_id
-  FROM `crypto_streaming.trades`
+  FROM `crypto_streaming.trades_clean`
   WHERE trade_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
 )
 WHERE next_id - trade_id > 1;

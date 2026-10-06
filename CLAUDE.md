@@ -8,7 +8,8 @@ Context for Claude Code sessions in this repo. Read this first, then `README.md`
 Portfolio project showing streaming data engineering on Google Cloud:
 Binance WebSocket (BTCUSDT, ETHUSDT `@trade`) → producer on an e2-micro VM → Pub/Sub topic `crypto-raw`
 → Dataflow (Apache Beam, Python, Flex Template) → BigQuery dataset `crypto_streaming`
-(`raw_events` bronze, `trades` silver, `dead_letter`). Current scope: **ingestion into BigQuery only**;
+(`raw_events` bronze, `trades` silver, `trades_clean` view = silver de-duplicated - query this, `dead_letter`).
+Current scope: **ingestion into BigQuery only**;
 analytics (VWAP, moving averages) come later.
 
 ## Environment (important)
@@ -121,17 +122,31 @@ Startup-script progress on the VM:
 - Fixed `scripts/logs.sh` (commit `a7da6fd`): `--order=asc` + `--limit` kept the OLDEST entries, so new lines were cut off.
 - Added `docs/roadmap-streaming-analytics.md` (design only; commit `2a7da8f`).
 
+**2026-10-06 (session 4) - second-boot check, `trades_clean` view, pipeline walk-through**
+- Verified the `startup.sh` fix on a second boot (VM only, no Dataflow, 09:13-09:18 UTC): exactly one `connecting` ~45 s after
+  start, no flush / double start, 0 errors. VM stopped again (`TERMINATED`, no jobs). Cost: a few cents. Its ~6.4k published
+  messages wait in the subscription (1-day retention) for the next Dataflow session.
+- Duplicate analysis: all 6 duplicate pairs share the same `msg_id` AND `pubsub_message_id`, `ingest_ts` and `publish_ts`; only
+  `processing_ts` differs (2-3 s). So one Pub/Sub message was processed twice by Dataflow - not a producer double-publish.
+  Pub/Sub redelivery vs bundle retry is still undetermined (ids 21917296661541752..58 are contiguous but two of them were not duplicated).
+- Added the `trades_clean` view (`google_bigquery_table.trades_clean` in `bigquery.tf`, applied with `make infra`: 1 added).
+  It keeps one row per `(symbol, trade_id, trade_time)`, earliest `processing_time` first. Checked: `trades` 104,983 rows vs
+  `trades_clean` 104,977 (= the 6 duplicates), 0 duplicate keys left. README tables and queries now use the view.
+- Walked through the pipeline code with the owner; points worth remembering: `id_label` is applied by Dataflow's native Pub/Sub source
+  at read time only, so a retried bundle can still write twice; the Flex Template spec has no parameter metadata (parameters are
+  passed through to `main.py` as flags); gRPC Storage Write API rows are queryable immediately and DML works on recent rows
+  (the earlier "can't delete buffered rows" remark was the old streaming-insert rule).
+- Looked up BigQuery ingestion pricing (search summary only, page fetch was truncated, unverified): Storage Write API ~$0.025/GiB with
+  2 TiB/month free vs legacy streaming inserts ~$0.05/GiB - negligible at this volume either way.
+
 ## Next steps
 
-1. Verify the `startup.sh` fix on a second boot: start only the VM (no Dataflow, ~3 min; ask first), `make logs` should show
-   exactly one `connecting` and no early `flushing pending publishes...`; then stop the VM.
-2. Make silver clean: add a `trades_clean` view that dedupes on `(symbol, trade_id)` (see `docs/roadmap-streaming-analytics.md`)
-   and point analytics/README queries at it.
-3. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
-4. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty).
-5. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
-6. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
-7. Later: streaming analytics - windowed VWAP/OHLC in Beam + Looker Studio chart (`docs/roadmap-streaming-analytics.md`);
+1. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
+2. Fix `scripts/status.sh` so the BigQuery section prints rows (run its query by hand to see why it is empty); consider
+   pointing it at `trades_clean`.
+3. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
+4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
+5. Later: streaming analytics - windowed VWAP/OHLC in Beam + Looker Studio chart (`docs/roadmap-streaming-analytics.md`);
    REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); `bookTicker` stream; monitoring dashboard + alerts;
    CI (GitHub Actions). Optional: budget kill-switch.
 
@@ -146,3 +161,6 @@ Startup-script progress on the VM:
 - Timestamps in `raw_events`: `event_ts` = Binance trade time, `ingest_ts` = producer received the frame, `publish_ts` = Pub/Sub accepted
   it (server-side), `processing_ts` = Dataflow processed it. In `trades` they are `trade_time`, `ingest_time`, `processing_time`.
 - `make infra` (apply) needs an interactive `yes`; non-interactive runs stop at the prompt - run it in the user's own WSL terminal.
+  While an apply waits at that prompt it already holds the Terraform state lock, so `make plan` fails until it finishes.
+- `bq query` with a backtick-quoted `project.dataset.table` inside `wsl bash -lc "..."` loses the backticks (shell command
+  substitution). Put the SQL in a file and redirect it (`< file.sql`), or use `dataset.table` without the project.
