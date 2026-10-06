@@ -81,13 +81,13 @@
     "name": "pane_timing",
     "type": "STRING",
     "mode": "NULLABLE",
-    "description": "ON_TIME (watermark passed the window end) or LATE (late data updated the window). Late panes replace earlier ones: read trade_metrics_1m_latest."
+    "description": "ON_TIME: first result, emitted when the watermark passes the window end. LATE: a later replacement result (pane_index 1). In practice it is usually identical to the ON_TIME row and is emitted when the window expires, about 150 s after the window end; it differs only if a trade arrived after the first result (then trade_count is higher). Read trade_metrics_1m_latest, which keeps the latest pane per window."
   },
   {
     "name": "pane_index",
     "type": "INTEGER",
     "mode": "NULLABLE",
-    "description": "0 for the first result of a window, increasing with every update."
+    "description": "0 for the first (ON_TIME) result of a window, 1 for the later LATE result. Higher index = later, complete replacement."
   },
   {
     "name": "processing_ts",

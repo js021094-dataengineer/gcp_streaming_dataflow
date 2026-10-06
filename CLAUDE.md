@@ -190,9 +190,11 @@ Startup-script progress on the VM:
 
 ## Next steps
 
-1. Gold layer follow-ups (it works; these are polish): (a) the redundant expiry pane - decide whether to suppress it or just document
-   it (the `pane_timing` description in `trade_metrics_1m.json` still says LATE means late data updated the window, which is misleading;
-   fixing the description needs `make infra`, which would also apply the pending `trade_count` description); (b) optional exact
+1. Gold layer follow-ups (it works; these are polish): (a) the redundant expiry pane was documented instead of suppressed (decision:
+   harmless, `trade_metrics_1m_latest` hides it): the `pane_timing`, `pane_index` and `trade_count` descriptions in
+   `trade_metrics_1m.json` were rewritten, but BigQuery still has the old text until `make infra` runs (`make plan` shows exactly one
+   in-place change, descriptions only; run `make infra` in the user's own WSL terminal). If it ever needs suppressing: skip the final
+   pane in `FormatMetricsFn` via the pane's `is_last` flag (unverified on Dataflow, needs a test and a live run); (b) optional exact
    de-duplication with a stateful DoFn before the window (see `docs/roadmap-streaming-analytics.md`); (c) a 5-minute roll-up view and
    moving averages in SQL.
 2. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
