@@ -208,7 +208,10 @@ Startup-script progress on the VM:
   `trade_metrics_1m_latest` on the 308 overlapping windows: 294 identical in ALL columns (count, volume, quote volume, buy volume, OHLC);
   the 14 others (7 per symbol: 10-06 09:14, 09:18, 10:12, 10:34, 18:07, 18:33 and 10-07 09:48) all have FEWER streamed trades (0 with more),
   consistent with partial minutes at pipeline start/stop (not checked one by one against job times). Re-running the loader (idempotency) not yet tried live.
-  NOT done yet: combined view `trade_metrics_1m_all`; backfill of longer history; pointing `trade_range_1m` at the combined data.
+  Then backfilled the whole of 2026 so far (`make backfill-klines FROM=2026-01-01`, 2026-01-01 00:00 -> 2026-10-07 11:30 UTC): 402,451 rows per
+  symbol, one per minute, 0 gaps, 0 duplicates, nothing before 2026 (the re-merge of 10-06/07 also showed the loader is idempotent). Re-validation
+  after the stream kept running: 316 overlapping windows, 302 identical, same 14 partial-minute differences, 0 with more streamed trades.
+  NOT done yet: combined view `trade_metrics_1m_all`; pointing `trade_range_1m` at the combined data; time-of-day analysis.
 
 ## Next steps
 
