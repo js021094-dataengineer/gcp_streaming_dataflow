@@ -45,7 +45,7 @@ Config lives in `config.env` (git-ignored); template in `config.env.example`.
 ## Commands
 
 ```bash
-make test            # unit tests (75, all passing; ~25-40 s, local only)
+make test            # unit tests (85, all passing; ~25-40 s, local only)
 make producer-local  # 20 live trades to stdout, no GCP
 make infra           # terraform apply (also uploads producer code + startup script to VM metadata)
 make build           # Cloud Build image + Flex Template (only needed after changes in pipeline/)
@@ -199,8 +199,16 @@ Startup-script progress on the VM:
   `klines_1m` (flag `keep_forever` skips the 30-day partition expiration; check with `bq show` after apply that no expiration is set,
   the plan only said "known after apply"). Applied 2026-10-07: `klines_1m` has no partition expiration, `trade_range_1m` works.
 - Step 2 (written, not committed): `backfill/klines.py` pure helpers (candle -> row, closed-minute filter, request windows, missing minutes),
-  `tests/test_klines.py` (32 tests), `KLINES_1M` in `bq_schemas.py`, `backfill` added to the test import path. 75 tests pass. Loader (step 3) and
-  combined view `trade_metrics_1m_all` still to do.
+  `tests/test_klines.py` (32 tests), `KLINES_1M` in `bq_schemas.py`, `backfill` added to the test import path (committed `5190d15`).
+- Step 3 (written, not committed): `backfill/load_klines.py` + `make backfill-klines FROM=... [TO=...] [ARGS=--dry-run]` (fetch with retries,
+  stage + MERGE keyed on (symbol, window_start), staging table dropped afterwards), `tests/test_load_klines.py` (10 tests). 85 tests pass.
+  Checked against the real Binance API: kline field order as in the docs; `endTime` is inclusive of the candle's open time; hard cap
+  1000 candles per call and the DEFAULT is 500 (loader always sends `limit=1000`). Dry run for 2026-10-06: 1,440 candles per symbol, 0 missing.
+  Loaded 2026-10-06 00:00 -> 2026-10-07 11:26 UTC (2,127 candles per symbol, 0 missing minutes, 1 row per minute). Validation against
+  `trade_metrics_1m_latest` on the 308 overlapping windows: 294 identical in ALL columns (count, volume, quote volume, buy volume, OHLC);
+  the 14 others (7 per symbol: 10-06 09:14, 09:18, 10:12, 10:34, 18:07, 18:33 and 10-07 09:48) all have FEWER streamed trades (0 with more),
+  consistent with partial minutes at pipeline start/stop (not checked one by one against job times). Re-running the loader (idempotency) not yet tried live.
+  NOT done yet: combined view `trade_metrics_1m_all`; backfill of longer history; pointing `trade_range_1m` at the combined data.
 
 ## Next steps
 

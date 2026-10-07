@@ -13,7 +13,7 @@ TF_VARS := TF_VAR_project_id=$(PROJECT_ID) TF_VAR_region=$(REGION) TF_VAR_zone=$
            TF_VAR_symbols=$(SYMBOLS) TF_VAR_streams=$(STREAMS)
 VENV := .venv
 
-.PHONY: help bootstrap infra plan build up down status logs ssh test producer-local destroy check-config
+.PHONY: help bootstrap infra plan build up down status logs ssh test producer-local backfill-klines destroy check-config
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -64,6 +64,9 @@ test: $(VENV)/bin/activate ## Run unit tests
 
 producer-local: $(VENV)/bin/activate ## Stream live Binance trades to stdout (no GCP needed)
 	$(VENV)/bin/python producer/producer.py --stdout --max-messages 20
+
+backfill-klines: $(VENV)/bin/activate check-config ## Load historical 1-minute candles: make backfill-klines FROM=2026-10-01 [TO=2026-10-07] [ARGS=--dry-run]
+	PYTHONPATH=pipeline $(VENV)/bin/python backfill/load_klines.py --from $(FROM) $(if $(TO),--to $(TO)) $(ARGS)
 
 # ---------------------------------------------------------------- teardown
 destroy: check-config ## Delete ALL project resources (keeps the project + state bucket)
