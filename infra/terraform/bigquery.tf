@@ -103,3 +103,40 @@ resource "google_bigquery_table" "trade_metrics_1m_latest" {
 
   depends_on = [google_bigquery_table.tables]
 }
+
+# 5-minute roll-up of the 1-minute gold layer, computed in SQL (no extra pipeline). Built from
+# trade_metrics_1m_latest so the extra panes are already gone. VWAP is re-derived from the sums
+# (quote_volume / volume), never averaged from the per-minute VWAPs; open / close are the first /
+# last 1-minute window's values. A bucket that is still filling holds fewer than 5 minutes
+# (see minutes_in_bucket).
+resource "google_bigquery_table" "trade_metrics_5m" {
+  dataset_id          = google_bigquery_dataset.crypto.dataset_id
+  table_id            = "trade_metrics_5m"
+  description         = "Gold, one row per (symbol, 5-minute bucket): roll-up of trade_metrics_1m_latest. Good source for dashboards."
+  labels              = local.labels
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      SELECT
+        symbol,
+        TIMESTAMP_BUCKET(window_start, INTERVAL 5 MINUTE) AS bucket_start,
+        COUNT(*) AS minutes_in_bucket,
+        SUM(trade_count) AS trade_count,
+        SUM(volume) AS volume,
+        SUM(quote_volume) AS quote_volume,
+        SAFE_DIVIDE(SUM(quote_volume), SUM(volume)) AS vwap,
+        ARRAY_AGG(open ORDER BY window_start ASC LIMIT 1)[OFFSET(0)] AS open,
+        MAX(high) AS high,
+        MIN(low) AS low,
+        ARRAY_AGG(close ORDER BY window_start DESC LIMIT 1)[OFFSET(0)] AS close,
+        SUM(buy_volume) AS buy_volume,
+        SUM(sell_volume) AS sell_volume
+      FROM `${var.project_id}.${google_bigquery_dataset.crypto.dataset_id}.trade_metrics_1m_latest`
+      GROUP BY symbol, bucket_start
+    SQL
+  }
+
+  depends_on = [google_bigquery_table.trade_metrics_1m_latest]
+}
