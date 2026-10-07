@@ -45,7 +45,7 @@ Config lives in `config.env` (git-ignored); template in `config.env.example`.
 ## Commands
 
 ```bash
-make test            # unit tests (43, all passing; ~25-40 s, local only)
+make test            # unit tests (75, all passing; ~25-40 s, local only)
 make producer-local  # 20 live trades to stdout, no GCP
 make infra           # terraform apply (also uploads producer code + startup script to VM metadata)
 make build           # Cloud Build image + Flex Template (only needed after changes in pipeline/)
@@ -197,7 +197,10 @@ Startup-script progress on the VM:
   vs log volume, so correlated but not redundant. Too little continuous data for time-of-day comparisons yet.
 - Kline backfill (`docs/roadmap-kline-backfill.md`, design only) step 1 written, not applied: schema `klines_1m.json` + Terraform table
   `klines_1m` (flag `keep_forever` skips the 30-day partition expiration; check with `bq show` after apply that no expiration is set,
-  the plan only said "known after apply"). `make plan`: 2 to add (this table + `trade_range_1m`). Combined view `trade_metrics_1m_all` still to do.
+  the plan only said "known after apply"). Applied 2026-10-07: `klines_1m` has no partition expiration, `trade_range_1m` works.
+- Step 2 (written, not committed): `backfill/klines.py` pure helpers (candle -> row, closed-minute filter, request windows, missing minutes),
+  `tests/test_klines.py` (32 tests), `KLINES_1M` in `bq_schemas.py`, `backfill` added to the test import path. 75 tests pass. Loader (step 3) and
+  combined view `trade_metrics_1m_all` still to do.
 
 ## Next steps
 

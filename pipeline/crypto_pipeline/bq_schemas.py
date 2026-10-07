@@ -17,6 +17,7 @@ RAW_EVENTS = "raw_events"
 TRADES = "trades"
 DEAD_LETTER = "dead_letter"
 TRADE_METRICS_1M = "trade_metrics_1m"
+KLINES_1M = "klines_1m"
 
 
 @lru_cache(maxsize=None)
