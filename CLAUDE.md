@@ -211,7 +211,21 @@ Startup-script progress on the VM:
   Then backfilled the whole of 2026 so far (`make backfill-klines FROM=2026-01-01`, 2026-01-01 00:00 -> 2026-10-07 11:30 UTC): 402,451 rows per
   symbol, one per minute, 0 gaps, 0 duplicates, nothing before 2026 (the re-merge of 10-06/07 also showed the loader is idempotent). Re-validation
   after the stream kept running: 316 overlapping windows, 302 identical, same 14 partial-minute differences, 0 with more streamed trades.
-  NOT done yet: combined view `trade_metrics_1m_all`; pointing `trade_range_1m` at the combined data; time-of-day analysis.
+- Time-of-day analysis on `klines_1m` (279 full UTC days, 2026-01-01..10-06, ad-hoc queries, not in the repo): 1-minute range (high-low as % of VWAP)
+  is lowest 03:00-11:00 UTC (BTC avg ~0.043-0.052%) and peaks at 14:00 UTC (BTC 0.102%, ETH 0.136%, ~2.4x the 04:00 low) with volume and trade
+  count. Weekends: about half the range and volume of weekdays. Biggest average minutes are 13:30 / 14:30-14:40 UTC; the sharp jump moves with US daylight
+  saving (summer: 13:30 jumps 0.051 -> 0.164 vs 13:29; winter: 14:30/14:31 reach 0.237/0.278) - consistent with the US cash open, but 8:30 ET data
+  releases (13:30 UTC in winter) also fit and the summer 12:30 UTC bump was not checked. Range vs log(quote volume) correlation 0.65 over all minutes
+  (0.52 on the small streamed sample): correlated, far from redundant. Max single minute: BTC 2.9%, ETH 5.4%.
+- Backfilled 2025 as well (owner asked after the 2026 analysis; `make backfill-klines FROM=2025-01-01 TO=2026-01-01`, ~10+ min): 525,600 rows
+  per symbol, so `klines_1m` now spans 2025-01-01 -> 2026-10-07, 928,051 rows per symbol, 0 gaps, 0 duplicates. Analysis above covers 2026 only.
+- Time-of-day analysis re-run on both years (644 days, ad-hoc queries): hourly range profile is the same in 2025 and 2026 (BTC 14:00 UTC = 0.1017% in both);
+  2025 had ~1.6x the volume per minute (BTC $1.46M vs $0.92M, ETH $1.20M vs $0.53M). Daylight saving now tested on 322 summer and 138 winter weekdays (BTC):
+  two jumps that both move by one hour with US DST - winter 13:30 (0.076 -> 0.201) and 14:30 (0.083 -> 0.228) UTC, summer 12:30 (0.051 -> 0.156) and
+  13:30 (0.048 -> 0.147) UTC, i.e. 8:30 and 9:30 US Eastern (consistent with data releases and the stock open; not matched to a calendar). Weekends ~half
+  of weekdays. Range vs log volume correlation 0.60-0.66 in each year. Most extreme minutes of both years are on 2025-10-10 (Fri) 21:13-22:04 UTC
+  (BTC 6.4% at 21:24, ETH 12.1% at 21:56 with 424k trades) and 2025-02-03 (Mon) 01:55-02:08 UTC (ETH up to 10.6%); causes not verified.
+  NOT done yet: combined view `trade_metrics_1m_all`; pointing `trade_range_1m` at the combined data; a dashboard page for this.
 
 ## Next steps
 
