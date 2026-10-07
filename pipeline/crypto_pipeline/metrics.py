@@ -21,8 +21,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Iterable, Optional
 
-NUMERIC_SCALE = 9
-_NUMERIC_QUANTUM = Decimal(1).scaleb(-NUMERIC_SCALE)  # 0.000000001
+from crypto_pipeline.parsing import NUMERIC_QUANTUM
 
 # (count, volume, quote_volume, buy_volume, sell_volume, high, low,
 #  open_key, open_price, close_key, close_price)  with key = (trade_time_micros, trade_id)
@@ -45,7 +44,7 @@ def _micros(value: Any) -> int:
 
 
 def _q(value: Decimal) -> Decimal:
-    return value.quantize(_NUMERIC_QUANTUM)
+    return value.quantize(NUMERIC_QUANTUM)
 
 
 def add_trade(acc: Accumulator, trade: dict[str, Any]) -> Accumulator:

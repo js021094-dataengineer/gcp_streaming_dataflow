@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 # BigQuery NUMERIC = precision 38, scale 9.
 NUMERIC_SCALE = 9
-_NUMERIC_QUANTUM = Decimal(1).scaleb(-NUMERIC_SCALE)  # 0.000000001
+NUMERIC_QUANTUM = Decimal(1).scaleb(-NUMERIC_SCALE)  # 0.000000001
 _NUMERIC_MAX_INTEGER_DIGITS = 29
 
 # Sanity bounds for exchange timestamps (ms since epoch).
@@ -152,7 +152,7 @@ def parse_trade(event: dict[str, Any], now_ms: int) -> dict[str, Any]:
     event_time_ms = _check_ts("event time (E)", _to_int_ms(event.get("E")), now_ms, required=False)
 
     # price * qty can have up to 16 decimals; round to NUMERIC scale.
-    quote_quantity = (price * quantity).quantize(_NUMERIC_QUANTUM)
+    quote_quantity = (price * quantity).quantize(NUMERIC_QUANTUM)
 
     return {
         "symbol": symbol.upper(),
