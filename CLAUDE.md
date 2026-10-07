@@ -195,6 +195,9 @@ Startup-script progress on the VM:
 - Added view `trade_range_1m` (`bigquery.tf`: range_abs, range_pct of VWAP, range_pct_per_musd) - written but NOT applied yet (`make infra`
   in the owner's WSL terminal, 1 add). Over 127 windows/symbol: range vs quote volume correlation 0.83 (BTC) / 0.96 (ETH) raw, ~0.52
   vs log volume, so correlated but not redundant. Too little continuous data for time-of-day comparisons yet.
+- Kline backfill (`docs/roadmap-kline-backfill.md`, design only) step 1 written, not applied: schema `klines_1m.json` + Terraform table
+  `klines_1m` (flag `keep_forever` skips the 30-day partition expiration; check with `bq show` after apply that no expiration is set,
+  the plan only said "known after apply"). `make plan`: 2 to add (this table + `trade_range_1m`). Combined view `trade_metrics_1m_all` still to do.
 
 ## Next steps
 

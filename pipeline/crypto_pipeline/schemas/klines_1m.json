@@ -1,0 +1,92 @@
+[
+  {
+    "name": "symbol",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Trading pair, e.g. BTCUSDT."
+  },
+  {
+    "name": "window_start",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "Candle open time = start of the 1-minute window (inclusive, UTC). Partition column."
+  },
+  {
+    "name": "window_end",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "window_start + 1 minute (exclusive)."
+  },
+  {
+    "name": "trade_count",
+    "type": "INTEGER",
+    "mode": "REQUIRED",
+    "description": "Number of trades in the candle, as reported by Binance."
+  },
+  {
+    "name": "volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Base asset volume."
+  },
+  {
+    "name": "quote_volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Quote asset volume (sum of price * quantity)."
+  },
+  {
+    "name": "vwap",
+    "type": "NUMERIC",
+    "mode": "NULLABLE",
+    "description": "Volume weighted average price: quote_volume / volume. NULL for a candle without volume."
+  },
+  {
+    "name": "open",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Price of the first trade in the candle."
+  },
+  {
+    "name": "high",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Highest trade price."
+  },
+  {
+    "name": "low",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Lowest trade price."
+  },
+  {
+    "name": "close",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Price of the last trade in the candle."
+  },
+  {
+    "name": "buy_volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Taker-buy base volume (aggressor was the buyer)."
+  },
+  {
+    "name": "sell_volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "volume - buy_volume (aggressor was the seller)."
+  },
+  {
+    "name": "source",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Where the row came from, e.g. binance_klines."
+  },
+  {
+    "name": "loaded_ts",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "When the backfill job loaded this row."
+  }
+]

@@ -31,6 +31,14 @@ locals {
       partition_field = "window_start"
       clustering      = ["symbol"]
     }
+    # Historical candles loaded by a batch job (docs/roadmap-kline-backfill.md). Tiny, and the
+    # whole point is old data, so it is exempt from the partition expiration.
+    klines_1m = {
+      description     = "Gold, imported: Binance 1-minute candles in the trade_metrics_1m shape, loaded by the backfill job. Not written by the streaming pipeline."
+      partition_field = "window_start"
+      clustering      = ["symbol"]
+      keep_forever    = true
+    }
   }
 }
 
@@ -48,7 +56,7 @@ resource "google_bigquery_table" "tables" {
   time_partitioning {
     type          = "DAY"
     field         = each.value.partition_field
-    expiration_ms = local.partition_expiration_ms
+    expiration_ms = try(each.value.keep_forever, false) ? null : local.partition_expiration_ms
   }
 }
 
