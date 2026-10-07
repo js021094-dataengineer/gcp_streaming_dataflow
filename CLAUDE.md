@@ -147,7 +147,7 @@ Startup-script progress on the VM:
 - Streaming analytics implemented (first live run below): `metrics.py` (pure VWAP/OHLC/volume math; first version: accumulator = dict keyed by
   `trade_id`, since replaced by a fixed-size one, see below), `TradeMetricsFn` / `FormatMetricsFn` / `WindowedTradeMetrics` in
   `transforms.py` (FixedWindows 60 s, `AfterWatermark(late=AfterCount(1))`, ACCUMULATING, allowed lateness 120 s), optional
-  `--metrics_table` flag + `_add_metrics_branch` in `pipeline.py` (re-windows to global before the sink; rejects go to `dead_letter`),
+  `--metrics_table` flag + an inline gold branch in `build_pipeline` (`pipeline.py`) (re-windows to global before the sink; rejects go to `dead_letter`),
   schema `trade_metrics_1m.json`, Terraform table `trade_metrics_1m` + view `trade_metrics_1m_latest` + output `metrics_table`,
   `up.sh` passes `metrics_table`. 18 new tests (TestStream on Beam's Prism runner): 41 pass.
   Decisions: 1-minute windows only (5-min can be a SQL roll-up view), no early firings, Looker Studio postponed.
