@@ -188,6 +188,14 @@ Startup-script progress on the VM:
   NOT a late trade. A genuinely late trade would show as a LATE pane with a higher `trade_count`; none so far (so no trade was dropped
   past the allowed lateness). The table therefore has ~2 rows per window; always query `trade_metrics_1m_latest`.
 
+**2026-10-07 (session 5) - dashboard + range view**
+- Owner built a Data Studio (renamed back from Looker Studio on 2026-04-11) time series on `trade_metrics_1m_latest`; the chart needed
+  `window_start` set to Date Hour Minute, freshness set to 15 min (lowest). Spike at 2026-10-07 10:07 UTC (BTC $21.7M, ETH $22.9M quote volume,
+  ~7-10x normal trade count) verified identical to a recomputation from `trades_clean`: real market event, not a bug.
+- Added view `trade_range_1m` (`bigquery.tf`: range_abs, range_pct of VWAP, range_pct_per_musd) - written but NOT applied yet (`make infra`
+  in the owner's WSL terminal, 1 add). Over 127 windows/symbol: range vs quote volume correlation 0.83 (BTC) / 0.96 (ETH) raw, ~0.52
+  vs log volume, so correlated but not redundant. Too little continuous data for time-of-day comparisons yet.
+
 ## Next steps
 
 1. Gold layer follow-ups (it works; these are polish): (a) the redundant expiry pane was documented instead of suppressed (decision:

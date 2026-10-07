@@ -140,3 +140,36 @@ resource "google_bigquery_table" "trade_metrics_5m" {
 
   depends_on = [google_bigquery_table.trade_metrics_1m_latest]
 }
+
+# Price range per 1-minute window (high - low), derived in SQL so it applies to all existing
+# windows. range_pct is relative to the window's VWAP, so it is comparable across symbols and price
+# levels; range_per_musd is the range (in percent) per million quote-currency traded, a rough
+# price-impact measure.
+resource "google_bigquery_table" "trade_range_1m" {
+  dataset_id          = google_bigquery_dataset.crypto.dataset_id
+  table_id            = "trade_range_1m"
+  description         = "Gold, one row per (symbol, window): high-low price range (absolute and as a share of VWAP) next to volume. Built from trade_metrics_1m_latest."
+  labels              = local.labels
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      SELECT
+        symbol,
+        window_start,
+        trade_count,
+        volume,
+        quote_volume,
+        vwap,
+        high,
+        low,
+        high - low AS range_abs,
+        SAFE_DIVIDE(high - low, vwap) * 100 AS range_pct,
+        SAFE_DIVIDE(SAFE_DIVIDE(high - low, vwap) * 100, quote_volume / 1e6) AS range_pct_per_musd
+      FROM `${var.project_id}.${google_bigquery_dataset.crypto.dataset_id}.trade_metrics_1m_latest`
+    SQL
+  }
+
+  depends_on = [google_bigquery_table.trade_metrics_1m_latest]
+}
