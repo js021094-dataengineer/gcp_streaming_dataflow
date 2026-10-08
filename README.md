@@ -120,7 +120,15 @@ long run: one Pub/Sub message processed twice by Dataflow). Analytics should rea
 The gold table `trade_metrics_1m` is computed in Beam from `trades` and does not remove these
 duplicates (about 0.006% of trades; a known limitation, see the design note).
 
-**Bronze / silver / dead letter.**
+**Three BigQuery datasets**, one job each:
+
+| Dataset | Written by | Holds |
+|---|---|---|
+| `crypto_streaming` | the Dataflow pipeline | bronze / silver / streamed gold and the views that clean them up (tables below) |
+| `crypto_history` | the batch candle loader (`make backfill-klines`) | `klines_1m`: Binance 1-minute candles from 2025 on, in the shape of `trade_metrics_1m` (see `docs/roadmap-kline-backfill.md`) |
+| `crypto_analytics` | nothing (views only) | `trade_metrics_1m_all` (candles + streamed windows, one row per minute, the candle wins), `trade_range_1m` (high-low range next to volume), `trade_profile_hourly` and `trade_profile_minute_of_day` (time-of-day profiles split by weekday/weekend and US daylight saving) - what dashboards read |
+
+**Bronze / silver / dead letter** (all in `crypto_streaming`).
 
 | Table | Contents | Partitioned by | Clustered by |
 |---|---|---|---|

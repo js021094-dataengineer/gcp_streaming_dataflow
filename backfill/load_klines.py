@@ -24,7 +24,7 @@ import klines
 from crypto_pipeline import bq_schemas
 
 BINANCE_URL = "https://api.binance.com/api/v3/klines"
-DEFAULT_DATASET = "crypto_streaming"
+DEFAULT_DATASET = "crypto_history"  # Terraform: google_bigquery_dataset.history
 TARGET_TABLE = bq_schemas.KLINES_1M
 STAGE_TABLE = "klines_1m_stage"
 REQUEST_PAUSE_S = 0.15  # stay far below Binance's request-weight limit (verify)

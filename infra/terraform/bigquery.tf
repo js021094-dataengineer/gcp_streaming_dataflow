@@ -1,7 +1,30 @@
+# Three datasets, one job each:
+#   crypto_streaming  written by the Dataflow pipeline (bronze / silver / streamed gold) and the
+#                     views that clean those tables up (trades_clean, trade_metrics_1m_latest)
+#   crypto_history    written by the batch candle loader (backfill/load_klines.py)
+#   crypto_analytics  views only: what dashboards and analysis read
 resource "google_bigquery_dataset" "crypto" {
   dataset_id                 = "crypto_streaming"
   location                   = var.region
-  description                = "Binance market data ingested via Pub/Sub + Dataflow."
+  description                = "Written by the streaming pipeline: Binance trades via Pub/Sub + Dataflow (bronze, silver, streamed gold) and the de-duplicating views over them."
+  labels                     = local.labels
+  delete_contents_on_destroy = true
+  depends_on                 = [google_project_service.services]
+}
+
+resource "google_bigquery_dataset" "history" {
+  dataset_id                 = "crypto_history"
+  location                   = var.region
+  description                = "Written by the batch backfill: historical Binance 1-minute candles (klines)."
+  labels                     = local.labels
+  delete_contents_on_destroy = true
+  depends_on                 = [google_project_service.services]
+}
+
+resource "google_bigquery_dataset" "analytics" {
+  dataset_id                 = "crypto_analytics"
+  location                   = var.region
+  description                = "Views only, for dashboards and analysis: streamed and historical data combined, range and time-of-day profiles."
   labels                     = local.labels
   delete_contents_on_destroy = true
   depends_on                 = [google_project_service.services]
@@ -31,14 +54,6 @@ locals {
       partition_field = "window_start"
       clustering      = ["symbol"]
     }
-    # Historical candles loaded by a batch job (docs/roadmap-kline-backfill.md). Tiny, and the
-    # whole point is old data, so it is exempt from the partition expiration.
-    klines_1m = {
-      description     = "Gold, imported: Binance 1-minute candles in the trade_metrics_1m shape, loaded by the backfill job. Not written by the streaming pipeline."
-      partition_field = "window_start"
-      clustering      = ["symbol"]
-      keep_forever    = true
-    }
   }
 }
 
@@ -56,7 +71,25 @@ resource "google_bigquery_table" "tables" {
   time_partitioning {
     type          = "DAY"
     field         = each.value.partition_field
-    expiration_ms = try(each.value.keep_forever, false) ? null : local.partition_expiration_ms
+    expiration_ms = local.partition_expiration_ms
+  }
+}
+
+# Historical candles loaded by a batch job (docs/roadmap-kline-backfill.md). Tiny, and the whole point
+# is old data, so unlike the streaming tables it has no partition expiration. It is not written by the
+# pipeline, hence its own dataset.
+resource "google_bigquery_table" "klines_1m" {
+  dataset_id          = google_bigquery_dataset.history.dataset_id
+  table_id            = "klines_1m"
+  description         = "Gold, imported: Binance 1-minute candles in the trade_metrics_1m shape, loaded by the backfill job."
+  labels              = local.labels
+  schema              = file("${local.schema_dir}/klines_1m.json")
+  clustering          = ["symbol"]
+  deletion_protection = false
+
+  time_partitioning {
+    type  = "DAY"
+    field = "window_start"
   }
 }
 
@@ -112,49 +145,12 @@ resource "google_bigquery_table" "trade_metrics_1m_latest" {
   depends_on = [google_bigquery_table.tables]
 }
 
-# 5-minute roll-up of the 1-minute gold layer, computed in SQL (no extra pipeline). Built from
-# trade_metrics_1m_latest so the extra panes are already gone. VWAP is re-derived from the sums
-# (quote_volume / volume), never averaged from the per-minute VWAPs; open / close are the first /
-# last 1-minute window's values. A bucket that is still filling holds fewer than 5 minutes
-# (see minutes_in_bucket).
-resource "google_bigquery_table" "trade_metrics_5m" {
-  dataset_id          = google_bigquery_dataset.crypto.dataset_id
-  table_id            = "trade_metrics_5m"
-  description         = "Gold, one row per (symbol, 5-minute bucket): roll-up of trade_metrics_1m_latest. Good source for dashboards."
-  labels              = local.labels
-  deletion_protection = false
-
-  view {
-    use_legacy_sql = false
-    query          = <<-SQL
-      SELECT
-        symbol,
-        TIMESTAMP_BUCKET(window_start, INTERVAL 5 MINUTE) AS bucket_start,
-        COUNT(*) AS minutes_in_bucket,
-        SUM(trade_count) AS trade_count,
-        SUM(volume) AS volume,
-        SUM(quote_volume) AS quote_volume,
-        SAFE_DIVIDE(SUM(quote_volume), SUM(volume)) AS vwap,
-        ARRAY_AGG(open ORDER BY window_start ASC LIMIT 1)[OFFSET(0)] AS open,
-        MAX(high) AS high,
-        MIN(low) AS low,
-        ARRAY_AGG(close ORDER BY window_start DESC LIMIT 1)[OFFSET(0)] AS close,
-        SUM(buy_volume) AS buy_volume,
-        SUM(sell_volume) AS sell_volume
-      FROM `${var.project_id}.${google_bigquery_dataset.crypto.dataset_id}.trade_metrics_1m_latest`
-      GROUP BY symbol, bucket_start
-    SQL
-  }
-
-  depends_on = [google_bigquery_table.trade_metrics_1m_latest]
-}
-
 # One row per (symbol, 1-minute window) from both gold sources: the streamed windows and the imported
 # Binance candles. The candle wins where both exist: validation showed the streamed row is never the
 # more complete one (it is short of trades in the minutes where a pipeline session started or stopped).
 # Streamed rows only fill the recent minutes that have not been backfilled yet. `source` says which.
 resource "google_bigquery_table" "trade_metrics_1m_all" {
-  dataset_id          = google_bigquery_dataset.crypto.dataset_id
+  dataset_id          = google_bigquery_dataset.analytics.dataset_id
   table_id            = "trade_metrics_1m_all"
   description         = "Gold, one row per (symbol, 1-minute window) from klines_1m and trade_metrics_1m_latest. The candle wins where both exist; source says which. Use this for history and time-of-day analysis."
   labels              = local.labels
@@ -169,7 +165,7 @@ resource "google_bigquery_table" "trade_metrics_1m_all" {
           symbol, window_start, window_end, trade_count, volume, quote_volume, vwap,
           open, high, low, close, buy_volume, sell_volume,
           'binance_klines' AS source, 1 AS priority
-        FROM `${var.project_id}.${google_bigquery_dataset.crypto.dataset_id}.klines_1m`
+        FROM `${var.project_id}.${google_bigquery_dataset.history.dataset_id}.klines_1m`
         UNION ALL
         SELECT
           symbol, window_start, window_end, trade_count, volume, quote_volume, vwap,
@@ -182,7 +178,7 @@ resource "google_bigquery_table" "trade_metrics_1m_all" {
   }
 
   depends_on = [
-    google_bigquery_table.tables,
+    google_bigquery_table.klines_1m,
     google_bigquery_table.trade_metrics_1m_latest,
   ]
 }
@@ -192,9 +188,9 @@ resource "google_bigquery_table" "trade_metrics_1m_all" {
 # levels; range_per_musd is the range (in percent) per million quote-currency traded, a rough
 # price-impact measure.
 resource "google_bigquery_table" "trade_range_1m" {
-  dataset_id          = google_bigquery_dataset.crypto.dataset_id
+  dataset_id          = google_bigquery_dataset.analytics.dataset_id
   table_id            = "trade_range_1m"
-  description         = "Gold, one row per (symbol, window): high-low price range (absolute and as a share of VWAP) next to volume. Built from trade_metrics_1m_latest."
+  description         = "Gold, one row per (symbol, window): high-low price range (absolute and as a share of VWAP) next to volume. Built from trade_metrics_1m_all, so it covers the imported candle history (2025 onwards) plus the streamed windows; source says which."
   labels              = local.labels
   deletion_protection = false
 
@@ -212,10 +208,91 @@ resource "google_bigquery_table" "trade_range_1m" {
         low,
         high - low AS range_abs,
         SAFE_DIVIDE(high - low, vwap) * 100 AS range_pct,
-        SAFE_DIVIDE(SAFE_DIVIDE(high - low, vwap) * 100, quote_volume / 1e6) AS range_pct_per_musd
-      FROM `${var.project_id}.${google_bigquery_dataset.crypto.dataset_id}.trade_metrics_1m_latest`
+        SAFE_DIVIDE(SAFE_DIVIDE(high - low, vwap) * 100, quote_volume / 1e6) AS range_pct_per_musd,
+        source
+      FROM `${var.project_id}.${google_bigquery_dataset.analytics.dataset_id}.trade_metrics_1m_all`
     SQL
   }
 
-  depends_on = [google_bigquery_table.trade_metrics_1m_latest]
+  depends_on = [google_bigquery_table.trade_metrics_1m_all]
+}
+
+# Time-of-day profiles for dashboards, computed in SQL over the whole combined history
+# (trade_metrics_1m_all). Range = (high - low) / VWAP in percent. Rows are split by weekday/weekend
+# (UTC day) and by US daylight saving time, because the US-driven spikes (8:30 and 9:30 US Eastern) move by
+# one hour in UTC when the clocks change. Both views scan the whole history (about 165 MB per query),
+# so keep the Data Studio freshness at 15 minutes or longer.
+locals {
+  profile_base_sql = <<-SQL
+    SELECT
+      symbol,
+      IF(EXTRACT(DAYOFWEEK FROM window_start) IN (1, 7), 'weekend', 'weekday') AS day_type,
+      DATETIME_DIFF(DATETIME(window_start, 'America/New_York'), DATETIME(window_start, 'UTC'), HOUR) = -4 AS us_dst,
+      window_start,
+      quote_volume,
+      trade_count,
+      SAFE_DIVIDE(high - low, vwap) * 100 AS range_pct
+    FROM `${var.project_id}.${google_bigquery_dataset.analytics.dataset_id}.trade_metrics_1m_all`
+    WHERE quote_volume > 0
+  SQL
+}
+
+resource "google_bigquery_table" "trade_profile_minute_of_day" {
+  dataset_id          = google_bigquery_dataset.analytics.dataset_id
+  table_id            = "trade_profile_minute_of_day"
+  description         = "Gold profile: per symbol, weekday/weekend, US-DST flag and UTC minute of day (HH:MM), the average / median / 95th percentile 1-minute range in percent, average quote volume (millions) and trade count, over the whole history of trade_metrics_1m_all."
+  labels              = local.labels
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      WITH m AS (
+        ${local.profile_base_sql}
+      )
+      SELECT
+        symbol, day_type, us_dst,
+        FORMAT_TIMESTAMP('%H:%M', window_start) AS minute_of_day_utc,
+        COUNT(*) AS minutes,
+        AVG(range_pct) AS avg_range_pct,
+        APPROX_QUANTILES(range_pct, 100)[OFFSET(50)] AS median_range_pct,
+        APPROX_QUANTILES(range_pct, 100)[OFFSET(95)] AS p95_range_pct,
+        CAST(AVG(quote_volume) AS FLOAT64) / 1e6 AS avg_musd,
+        AVG(trade_count) AS avg_trade_count
+      FROM m
+      GROUP BY symbol, day_type, us_dst, minute_of_day_utc
+    SQL
+  }
+
+  depends_on = [google_bigquery_table.trade_metrics_1m_all]
+}
+
+resource "google_bigquery_table" "trade_profile_hourly" {
+  dataset_id          = google_bigquery_dataset.analytics.dataset_id
+  table_id            = "trade_profile_hourly"
+  description         = "Gold profile: per symbol, weekday/weekend, US-DST flag and UTC hour of day, the average / median / 95th percentile 1-minute range in percent, average quote volume (millions) and trade count, over the whole history of trade_metrics_1m_all."
+  labels              = local.labels
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      WITH m AS (
+        ${local.profile_base_sql}
+      )
+      SELECT
+        symbol, day_type, us_dst,
+        EXTRACT(HOUR FROM window_start) AS hour_utc,
+        COUNT(*) AS minutes,
+        AVG(range_pct) AS avg_range_pct,
+        APPROX_QUANTILES(range_pct, 100)[OFFSET(50)] AS median_range_pct,
+        APPROX_QUANTILES(range_pct, 100)[OFFSET(95)] AS p95_range_pct,
+        CAST(AVG(quote_volume) AS FLOAT64) / 1e6 AS avg_musd,
+        AVG(trade_count) AS avg_trade_count
+      FROM m
+      GROUP BY symbol, day_type, us_dst, hour_utc
+    SQL
+  }
+
+  depends_on = [google_bigquery_table.trade_metrics_1m_all]
 }

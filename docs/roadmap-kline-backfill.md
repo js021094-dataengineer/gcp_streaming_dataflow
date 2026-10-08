@@ -62,8 +62,8 @@ silver layer has.
    the streamed row (only the recent minutes not yet backfilled). A `source` column says which.
    (Changed from the first draft, which let the streamed row win: the validation showed the
    streamed row is never the more complete one, it is short of trades in the minutes where a
-   pipeline session started or stopped.) `trade_range_1m` and the 5-minute roll-up can be
-   pointed at this view later.
+   pipeline session started or stopped.) `trade_range_1m` and the
+   time-of-day profile views read this view.
 3. **Batch loader.** A small Python script (e.g. `backfill/klines.py`, plus `make backfill-klines
    FROM=... TO=...`), run on demand:
    - Paginate by `startTime` in 1000-candle steps, respect rate limits (back off on HTTP 429/418),

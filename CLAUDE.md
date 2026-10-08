@@ -9,6 +9,9 @@ Portfolio project showing streaming data engineering on Google Cloud:
 Binance WebSocket (BTCUSDT, ETHUSDT `@trade`) → producer on an e2-micro VM → Pub/Sub topic `crypto-raw`
 → Dataflow (Apache Beam, Python, Flex Template) → BigQuery dataset `crypto_streaming`
 (`raw_events` bronze, `trades` silver, `trades_clean` view = silver de-duplicated - query this, `dead_letter`).
+Three datasets: `crypto_streaming` (written by the pipeline), `crypto_history` (`klines_1m`, historical candles loaded by
+`make backfill-klines`), `crypto_analytics` (views only: `trade_metrics_1m_all`, `trade_range_1m`, `trade_profile_hourly`,
+`trade_profile_minute_of_day`; what dashboards read).
 Current scope: ingestion into BigQuery plus a gold layer: 1-minute event-time VWAP / OHLC / volume per symbol
 (`trade_metrics_1m`, query the `trade_metrics_1m_latest` view) computed in Beam - deployed and verified live on 2026-10-06 (second run:
 22 of 22 windows identical to a SQL recomputation from `trades`; the first run had stalled, see Progress log). Moving averages and
@@ -230,8 +233,27 @@ Startup-script progress on the VM:
 - Added view `trade_metrics_1m_all` (`bigquery.tf`): klines_1m UNION ALL trade_metrics_1m_latest, one row per (symbol, window_start), the CANDLE
   wins (design note changed: the streamed row is never the more complete one), `source` = `binance_klines` | `stream`. Tested as a plain query
   first: per symbol 928,051 candle rows (2025-01-01 -> 2026-10-07 11:30) + 129 streamed rows (11:31 -> 13:39), no duplicate windows.
-  `make plan`: 1 to add. NOT applied yet (`make infra` in the owner's WSL terminal).
-  NOT done yet: pointing `trade_range_1m` and the 5-minute view at the combined data; a dashboard page for the time-of-day profile.
+  Applied and verified 2026-10-08 (same counts through the view, `make plan` = No changes).
+- `trade_range_1m` now reads `trade_metrics_1m_all` and has a `source` column (written, `make plan`: 1 in-place change, NOT applied yet).
+- Dropped the `trade_metrics_5m` view (owner: not needed for now; it had been added earlier in `f32a00b`; `make infra` destroys it). New views `trade_profile_minute_of_day` (11,520 rows) and `trade_profile_hourly` (192 rows):
+  per symbol x weekday/weekend x `us_dst` (US daylight saving flag from America/New_York) x UTC minute / hour, with avg / median / p95 range %, avg
+  quote volume (millions) and trade count over the whole combined history. SQL tested as plain queries first (1,856,360 minutes = 2 x 928,180, both
+  DST halves populated); each query scans ~165 MB, so keep dashboard freshness >= 15 min. `make plan`: 2 to add, 1 to change (`trade_range_1m`),
+  1 to destroy (`trade_metrics_5m`), NOT applied yet.
+- APPLIED and verified 2026-10-08 (`make plan` = No changes): owner restored `crypto_history.klines_1m` from the backup (1,856,102 rows, all
+  identical to the backup, partitioned + clustered); a short `make backfill-klines FROM=2026-10-06` then added the newest minutes to 929,463 rows per
+  symbol (old range unchanged, no duplicates, staging table gone); the four `crypto_analytics` views work (1,858,926 minutes; the 129 streamed minutes are
+  now all covered by candles, so `source = stream` rows = 0). The temporary backup `crypto_streaming.klines_backup` was
+  deleted after the restore was verified. Plan details: 3 datasets: new `crypto_history` (table
+  `klines_1m`, now its own resource, no partition expiration; `keep_forever` flag removed from the tables map) and `crypto_analytics` (the 4
+  analytics views, replaced there); `crypto_streaming` keeps the pipeline tables plus `trades_clean` / `trade_metrics_1m_latest`. The
+  apply DESTROYS the old `crypto_streaming.klines_1m` (1.86M rows): after `make infra` re-run `make backfill-klines FROM=2025-01-01` (free,
+  ~15-20 min, idempotent). BACKUP made first: `crypto_streaming.klines_backup` (`bq cp`, 1,856,102 rows = original, not partitioned/clustered; not
+  managed by Terraform, survives the apply). After the apply restore with `INSERT INTO crypto_history.klines_1m SELECT * FROM
+  crypto_streaming.klines_backup`, verify the count, run a short `make backfill-klines FROM=<2 days ago>` to test the new default dataset, then
+  `bq rm -t crypto_streaming.klines_backup`. Loader default dataset is now `crypto_history`. Outputs `history_dataset`, `analytics_dataset` added.
+  Data Studio sources on the old views (`crypto_streaming.trade_range_1m` etc.) must be re-added from `crypto_analytics`.
+  NOT done yet: a dashboard page for the profiles.
 
 ## Next steps
 
@@ -240,12 +262,12 @@ Startup-script progress on the VM:
    `trade_metrics_1m.json` were rewritten, but BigQuery still has the old text until `make infra` runs (`make plan` shows exactly one
    in-place change, descriptions only; run `make infra` in the user's own WSL terminal). If it ever needs suppressing: skip the final
    pane in `FormatMetricsFn` via the pane's `is_last` flag (unverified on Dataflow, needs a test and a live run); (b) optional exact
-   de-duplication with a stateful DoFn before the window (see `docs/roadmap-streaming-analytics.md`); (c) a 5-minute roll-up view and
+   de-duplication with a stateful DoFn before the window (see `docs/roadmap-streaming-analytics.md`); (c)
    moving averages in SQL.
 2. Optional: find the cause of the duplicates - Dataflow worker logs (warnings/retries) around 17:10:20-30 and 17:15:09-15 UTC on 2026-10-03.
 3. Consider ordering in `up.sh`: start the VM only once the worker is up (worker takes ~6.5 min), to avoid the startup backlog.
 4. Make `consume()` react to `stop` immediately and shorten the websocket close wait, so any restart loses less.
-5. Later: moving averages / 5-min roll-up view and a Looker Studio chart (`docs/roadmap-streaming-analytics.md`);
+5. Later: moving averages and a Looker Studio chart (`docs/roadmap-streaming-analytics.md`);
    REST backfill of trade-id gaps (`docs/roadmap-rest-backfill.md`); `bookTicker` stream; monitoring dashboard + alerts;
    CI (GitHub Actions). Optional: budget kill-switch.
 

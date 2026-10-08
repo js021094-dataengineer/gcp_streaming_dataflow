@@ -10,6 +10,14 @@ output "dataset" {
   value = google_bigquery_dataset.crypto.dataset_id
 }
 
+output "history_dataset" {
+  value = google_bigquery_dataset.history.dataset_id
+}
+
+output "analytics_dataset" {
+  value = google_bigquery_dataset.analytics.dataset_id
+}
+
 output "raw_table" {
   value = "${var.project_id}:${google_bigquery_dataset.crypto.dataset_id}.raw_events"
 }
