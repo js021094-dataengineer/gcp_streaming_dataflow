@@ -149,6 +149,44 @@ resource "google_bigquery_table" "trade_metrics_5m" {
   depends_on = [google_bigquery_table.trade_metrics_1m_latest]
 }
 
+# One row per (symbol, 1-minute window) from both gold sources: the streamed windows and the imported
+# Binance candles. The candle wins where both exist: validation showed the streamed row is never the
+# more complete one (it is short of trades in the minutes where a pipeline session started or stopped).
+# Streamed rows only fill the recent minutes that have not been backfilled yet. `source` says which.
+resource "google_bigquery_table" "trade_metrics_1m_all" {
+  dataset_id          = google_bigquery_dataset.crypto.dataset_id
+  table_id            = "trade_metrics_1m_all"
+  description         = "Gold, one row per (symbol, 1-minute window) from klines_1m and trade_metrics_1m_latest. The candle wins where both exist; source says which. Use this for history and time-of-day analysis."
+  labels              = local.labels
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      SELECT * EXCEPT (priority)
+      FROM (
+        SELECT
+          symbol, window_start, window_end, trade_count, volume, quote_volume, vwap,
+          open, high, low, close, buy_volume, sell_volume,
+          'binance_klines' AS source, 1 AS priority
+        FROM `${var.project_id}.${google_bigquery_dataset.crypto.dataset_id}.klines_1m`
+        UNION ALL
+        SELECT
+          symbol, window_start, window_end, trade_count, volume, quote_volume, vwap,
+          open, high, low, close, buy_volume, sell_volume,
+          'stream' AS source, 2 AS priority
+        FROM `${var.project_id}.${google_bigquery_dataset.crypto.dataset_id}.trade_metrics_1m_latest`
+      )
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol, window_start ORDER BY priority) = 1
+    SQL
+  }
+
+  depends_on = [
+    google_bigquery_table.tables,
+    google_bigquery_table.trade_metrics_1m_latest,
+  ]
+}
+
 # Price range per 1-minute window (high - low), derived in SQL so it applies to all existing
 # windows. range_pct is relative to the window's VWAP, so it is comparable across symbols and price
 # levels; range_per_musd is the range (in percent) per million quote-currency traded, a rough

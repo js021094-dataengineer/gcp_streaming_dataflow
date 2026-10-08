@@ -225,7 +225,13 @@ Startup-script progress on the VM:
   13:30 (0.048 -> 0.147) UTC, i.e. 8:30 and 9:30 US Eastern (consistent with data releases and the stock open; not matched to a calendar). Weekends ~half
   of weekdays. Range vs log volume correlation 0.60-0.66 in each year. Most extreme minutes of both years are on 2025-10-10 (Fri) 21:13-22:04 UTC
   (BTC 6.4% at 21:24, ETH 12.1% at 21:56 with 424k trades) and 2025-02-03 (Mon) 01:55-02:08 UTC (ETH up to 10.6%); causes not verified.
-  NOT done yet: combined view `trade_metrics_1m_all`; pointing `trade_range_1m` at the combined data; a dashboard page for this.
+
+**2026-10-08 (session 6) - combined view**
+- Added view `trade_metrics_1m_all` (`bigquery.tf`): klines_1m UNION ALL trade_metrics_1m_latest, one row per (symbol, window_start), the CANDLE
+  wins (design note changed: the streamed row is never the more complete one), `source` = `binance_klines` | `stream`. Tested as a plain query
+  first: per symbol 928,051 candle rows (2025-01-01 -> 2026-10-07 11:30) + 129 streamed rows (11:31 -> 13:39), no duplicate windows.
+  `make plan`: 1 to add. NOT applied yet (`make infra` in the owner's WSL terminal).
+  NOT done yet: pointing `trade_range_1m` and the 5-minute view at the combined data; a dashboard page for the time-of-day profile.
 
 ## Next steps
 

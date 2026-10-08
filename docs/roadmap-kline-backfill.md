@@ -58,9 +58,12 @@ silver layer has.
    column names above plus `source = 'binance_klines'`. Imported data stays distinguishable from
    data computed by our pipeline, and re-loading it can never touch the streaming table.
 2. **Combined view.** `trade_metrics_1m_all`: union of `trade_metrics_1m_latest` and `klines_1m`,
-   one row per `(symbol, window_start)`. Where both have a window, the streamed row wins (our own
-   numbers), otherwise the candle row. A `source` column says which. `trade_range_1m` and the
-   5-minute roll-up can be pointed at this view later.
+   one row per `(symbol, window_start)`. Where both have a window, the **candle wins**, otherwise
+   the streamed row (only the recent minutes not yet backfilled). A `source` column says which.
+   (Changed from the first draft, which let the streamed row win: the validation showed the
+   streamed row is never the more complete one, it is short of trades in the minutes where a
+   pipeline session started or stopped.) `trade_range_1m` and the 5-minute roll-up can be
+   pointed at this view later.
 3. **Batch loader.** A small Python script (e.g. `backfill/klines.py`, plus `make backfill-klines
    FROM=... TO=...`), run on demand:
    - Paginate by `startTime` in 1000-candle steps, respect rate limits (back off on HTTP 429/418),
